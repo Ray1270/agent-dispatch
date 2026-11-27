@@ -1,0 +1,99 @@
+{
+  "defaults": {
+    "timeoutSec": 600,
+    "maxTimeoutSec": 1800,
+    "useDshStoredCredentials": true,
+    "selfMaxFiles": 2,
+    "defaultFallback": {
+      "codex": "dsh",
+      "dsh": "codex"
+    }
+  },
+  "models": {
+    "codex": null,
+    "dsh": null
+  },
+  "workers": {
+    "self": {
+      "label": "Antigravity (主模型)",
+      "description": "纯问答/设计讨论、≤2 个文件的小修小改、派发前分析与派发后实证验收",
+      "keywords": [
+        "解释",
+        "为什么",
+        "方案对比",
+        "架构讨论",
+        "小改",
+        "改一行",
+        "typo",
+        "explain",
+        "question"
+      ]
+    },
+    "codex": {
+      "label": "Codex CLI",
+      "description": "中大型编码实现、跨文件重构、测试编写、严格沙箱改代码、Code Review",
+      "keywords": [
+        "重构",
+        "refactor",
+        "测试",
+        "unit test",
+        "integration test",
+        "review",
+        "代码审查",
+        "实现",
+        "模块",
+        "typescript",
+        "rust",
+        "python",
+        "bugfix",
+        "修复",
+        "migration",
+        "沙箱"
+      ]
+    },
+    "dsh": {
+      "label": "DeepSeek Harness (dsh)",
+      "description": "通用脚本与自动化、文档与调研总结、中文重上下文任务、dsh 插件生态任务及 Codex 限额兜底",
+      "keywords": [
+        "脚本",
+        "script",
+        "自动化",
+        "调研",
+        "总结",
+        "文档",
+        "readme",
+        "markdown",
+        "翻译",
+        "分析报告",
+        "中文",
+        "dsh",
+        "批量"
+      ]
+    }
+  },
+  "isolation": {
+    "readonlyKeywords": [
+      "只读",
+      "调研",
+      "分析",
+      "检查",
+      "review",
+      "审查",
+      "audit",
+      "排查",
+      "explain",
+      "inspect"
+    ],
+    "worktreeKeywords": [
+      "大重构",
+      "并行",
+      "实验",
+      "危险",
+      "破坏性",
+      "migration",
+      "重写",
+      "rewrite",
+      "major refactor"
+    ]
+  }
+}

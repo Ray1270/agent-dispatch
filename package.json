@@ -1,0 +1,17 @@
+{
+  "name": "agent-dispatch",
+  "version": "0.1.0",
+  "description": "Local task analysis, routing, sandboxed execution, and verification wrapper for Codex CLI and DeepSeek Harness (dsh).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "agent-dispatch": "./bin/dispatch.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "doctor": "node bin/dispatch.mjs doctor"
+  },
+  "license": "MIT"
+}
