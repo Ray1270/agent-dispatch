@@ -56,20 +56,23 @@ node bin/dispatch.mjs cleanup-worktree --run-id "<run-id>"
 - **单次覆盖**：通过 `--model <id>` 与 `--effort <level>` 可覆盖任意一次 `run` 或 `resume`：
   - `codex` 通过 `-m` 与 `-c model_reasoning_effort=...` 传递，并默认附带 `--thread-source vscode` 便于在桌面端查看会话；
   - `dsh` 通过单次临时 `--patch` 覆写 `agent-default-model` 的 `model` / `reasoningEffort`，不影响全局配置。
-- **实时看板（`ui` / `watch`）**：运行 `npm run ui`（默认 `http://127.0.0.1:4310`）可在浏览器统一查看 Codex 与 DSH 的实时步骤流、耗时进度条、工具调用与变更清单。
+- **实时看板（侧边栏 / 独立网页 / 终端）**：
+  - **Antigravity 侧边栏直开（推荐）**：安装完整 `plugin/`（含 `sidecars/dashboard/`）后，可在侧边栏直接打开 **Dispatch 看板**，无需另开浏览器窗口。
+  - **独立网页 / 终端**：也可运行 `npm run ui`（默认 `http://127.0.0.1:4310`）或 `node bin/dispatch.mjs watch` 查看实时步骤流、耗时进度条、工具调用与变更清单。
 
 ## 配置与状态目录
 
 - 运行时状态、历史记录（`runs/`）、临时工作树（`worktrees/`）以及可编辑的 `routing.json` 默认保存在 `~/.agent-dispatch/`。
 - 如需迁移出默认目录（例如挪到其他磁盘），设置环境变量 `AGENT_DISPATCH_HOME` 指向目标目录即可。
 
-## 安装 Antigravity 插件（推荐，支持主动触发与一键开关）
+## 安装 Antigravity 插件（推荐，支持主动触发与侧边栏看板）
 
-将 [`plugin/`](plugin/) 目录整体复制到 `~/.gemini/config/plugins/agent-dispatch/`，并把 `skills/agent-dispatch/SKILL.md` 中的 `<AGENT_DISPATCH_ROOT>` 替换为本仓库的实际本地路径。
+将 [`plugin/`](plugin/) 目录整体复制到 `~/.gemini/config/plugins/agent-dispatch/`，并将 `skills/agent-dispatch/SKILL.md` 及 `sidecars/dashboard/main.mjs` 中的 `<AGENT_DISPATCH_ROOT>` 替换为本仓库的实际本地路径。
 
 安装后包含：
 - `rules/AGENTS.md`：常驻轻量规则，让主模型遇到中大型编码、重构、测试、脚本或调研任务时**主动进入派发分析并给出确认单**（无需每次手动提醒）。
 - `skills/agent-dispatch/SKILL.md`：完整的分析、派发、验收与返工流程。
+- `sidecars/dashboard/`：内嵌于 Antigravity 右侧边栏的实时进度看板。
 - 在 Antigravity 插件设置中可随时一键开启/关闭。
 
 如果不需要自动触发规则、只想手动按需调用，也可以只把 [`skill/SKILL.md`](skill/SKILL.md) 复制到 `~/.gemini/config/skills/agent-dispatch/SKILL.md`（同样替换 `<AGENT_DISPATCH_ROOT>`）。

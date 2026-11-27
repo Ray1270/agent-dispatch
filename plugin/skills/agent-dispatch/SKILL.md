@@ -74,7 +74,7 @@ node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" run --worker <codex|dsh> --mode <r
 说明与实时进度查看：
 - `dsh` 认证：脚本默认通过 `--patch` 自动接通本机已登录的 `~/.dsh/.credentials.yaml`，无需另配 Key；若指定 `--model` / `--effort`，会生成单次临时 patch 覆盖默认模型。
 - 过程日志、diff、提示词与 `sessionId` 均持久化在 `~/.agent-dispatch/runs/<runId>/`。
-- 实时进度：用户可运行 `node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" ui` 打开 `http://127.0.0.1:4310` 查看统一实时看板，或运行 `watch` 在终端流式跟踪。
+- 实时进度（侧边栏直开）：派发开始时在聊天回复中附带侧边栏快捷入口 `[Dispatch 看板](sidecar://agent-dispatch/dashboard/)`，用户点击即可在 Antigravity 右侧边栏实时盯进度；也可运行 `node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" ui` 或 `watch`。
 
 ## 5. 实证验收与如实汇报
 

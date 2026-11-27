@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createDashboardServer } from '../src/dashboard.mjs';
+import { createDashboardServer, renderDashboardHtml } from '../src/dashboard.mjs';
 import { parseLiveRunProgress } from '../src/events.mjs';
 import { createRunDir, saveRunMeta } from '../src/store.mjs';
 
@@ -89,6 +89,11 @@ test('createDashboardServer serves HTML dashboard and /api/runs endpoints', asyn
     assert.equal(htmlRes.status, 200);
     const html = await htmlRes.text();
     assert.ok(html.includes('Agent Dispatch'));
+    assert.ok(!html.includes('/preload.js'));
+
+    const sidecarHtml = renderDashboardHtml({ includePreload: true });
+    assert.ok(sidecarHtml.includes('<script src="/preload.js"></script>'));
+    assert.ok(sidecarHtml.includes('@media (max-width: 720px)'));
 
     const listRes = await fetch(`${base}/api/runs`);
     assert.equal(listRes.status, 200);
@@ -101,6 +106,12 @@ test('createDashboardServer serves HTML dashboard and /api/runs endpoints', asyn
     const detailData = await detailRes.json();
     assert.equal(detailData.sessionId, 'th-ui');
     assert.equal(detailData.events.length, 1);
+
+    const queryDetailRes = await fetch(`${base}/api/run?id=20261127-190000-codex-aaaa`);
+    assert.equal(queryDetailRes.status, 200);
+    const queryDetailData = await queryDetailRes.json();
+    assert.equal(queryDetailData.sessionId, 'th-ui');
+    assert.equal(queryDetailData.events.length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(stateDir, { recursive: true, force: true });
