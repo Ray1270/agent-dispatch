@@ -31,6 +31,7 @@ function killProcessTree(child) {
  * @param {string} options.stdoutFile
  * @param {string} options.stderrFile
  * @param {NodeJS.ProcessEnv} [options.env]
+ * @param {(pid: number) => void} [options.onSpawn]
  */
 export function runProcess({
   command,
@@ -41,6 +42,7 @@ export function runProcess({
   stdoutFile,
   stderrFile,
   env,
+  onSpawn,
 }) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -61,6 +63,14 @@ export function runProcess({
       detached: process.platform !== 'win32',
       env: env ? { ...process.env, ...env } : process.env,
     });
+
+    if (typeof onSpawn === 'function' && typeof child.pid === 'number') {
+      try {
+        onSpawn(child.pid);
+      } catch {
+        // Ignore callback failure
+      }
+    }
 
     const timer = timeoutMs > 0
       ? setTimeout(() => {

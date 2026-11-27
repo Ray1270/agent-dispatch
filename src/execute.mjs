@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildCodexArgs, parseCodexJsonl } from './adapters/codex.mjs';
-import { buildDshArgs, parseDshJsonl } from './adapters/dsh.mjs';
+import { buildDshArgs, buildDshOverridePatchYaml, parseDshJsonl, resolveDshDefaultModel } from './adapters/dsh.mjs';
 import { ensureUserConfig, getDshAuthPatchPath, getStateDir, loadConfig } from './config.mjs';
 import { resolveCodexBinary, resolveDshBinary } from './discovery.mjs';
 import { buildWorkerPrompt } from './prompt.mjs';
@@ -46,6 +46,15 @@ export function determineStatus({ timedOut, exitCode, errors, turnEndReason }) {
   return 'ok';
 }
 
+function inferTier({ mode, task, explicitTier }) {
+  if (explicitTier && ['light', 'standard', 'heavy'].includes(explicitTier)) {
+    return explicitTier;
+  }
+  if (mode === 'worktree' || String(task || '').length > 300) return 'heavy';
+  if (mode === 'readonly') return 'light';
+  return 'standard';
+}
+
 /**
  * Execute a new worker run or dry-run.
  * @param {object} params
@@ -75,14 +84,22 @@ export async function executeRun(params) {
     throw new Error('Task cannot be empty. Provide --task or --task-file.');
   }
 
+  const tier = inferTier({ mode, task, explicitTier: params.tier });
+  const tierConfig = config?.tiers?.[worker]?.[tier] || {};
+
   const maxTimeoutSec = Number(config?.defaults?.maxTimeoutSec ?? 1800);
   const defaultTimeoutSec = Number(config?.defaults?.timeoutSec ?? 600);
   const timeoutSec = Math.min(
     maxTimeoutSec,
-    Math.max(10, Number(params.timeoutSec || defaultTimeoutSec))
+    Math.max(10, Number(params.timeoutSec || tierConfig.timeoutSec || defaultTimeoutSec))
   );
 
-  const model = params.model ?? config?.models?.[worker] ?? null;
+  const model = params.model ?? tierConfig.model ?? config?.models?.[worker] ?? null;
+  const effort = params.effort ?? tierConfig.effort ?? null;
+  const codexThreadSource = worker === 'codex'
+    ? (config?.defaults?.codexThreadSource ?? 'vscode')
+    : null;
+
   const useStoredCredentials =
     params.useDshStoredAuth !== undefined
       ? Boolean(params.useDshStoredAuth)
@@ -96,8 +113,15 @@ export async function executeRun(params) {
 
   const backend = resolveBackend(worker);
   const warnings = [];
-  if (worker === 'dsh' && model) {
-    warnings.push(`dsh headless profile does not support CLI --model override; ignoring "${model}" and using profile default.`);
+  let dshOverrideYaml = null;
+  if (worker === 'dsh' && (model || effort)) {
+    const base = params.dryRun ? { provider: 'deepseek-official', model: 'deepseek-flash' } : resolveDshDefaultModel(backend);
+    dshOverrideYaml = buildDshOverridePatchYaml({
+      model,
+      effort,
+      baseProvider: base.provider,
+      baseModel: base.model,
+    });
   }
 
   if (params.dryRun) {
@@ -109,19 +133,36 @@ export async function executeRun(params) {
       constraints: params.constraints,
     });
     const fakeLastMsg = path.join(stateDir, 'runs', '<run-id>', 'last-message.txt');
+    const fakeOverridePath = dshOverrideYaml
+      ? path.join(stateDir, 'runs', '<run-id>', 'dsh-override-patch.yml')
+      : null;
     const args =
       worker === 'codex'
-        ? buildCodexArgs({ cwd, mode, isGit: gitRepo, model, sessionId: null, lastMessageFile: fakeLastMsg })
+        ? buildCodexArgs({
+            cwd,
+            mode,
+            isGit: gitRepo,
+            model,
+            effort,
+            threadSource: codexThreadSource,
+            sessionId: null,
+            lastMessageFile: fakeLastMsg,
+          })
         : buildDshArgs({
             argsPrefix: backend.argsPrefix,
             useStoredCredentials,
             authPatchPath,
+            extraPatchPaths: fakeOverridePath ? [fakeOverridePath] : [],
             sessionId: null,
           });
     return {
       dryRun: true,
       worker,
       mode,
+      tier,
+      model,
+      effort,
+      threadSource: codexThreadSource,
       isGit: gitRepo,
       cwd,
       effectiveCwd: mode === 'worktree' ? path.join(stateDir, 'worktrees', '<run-id>') : cwd,
@@ -129,6 +170,7 @@ export async function executeRun(params) {
       args,
       timeoutSec,
       useStoredCredentials: worker === 'dsh' ? useStoredCredentials : undefined,
+      dshOverridePatch: dshOverrideYaml || undefined,
       warnings,
       promptPreview: previewPrompt,
     };
@@ -140,6 +182,12 @@ export async function executeRun(params) {
   const stderrFile = path.join(runDir, 'stderr.log');
   const lastMessageFile = path.join(runDir, 'last-message.txt');
   const promptFile = path.join(runDir, 'prompt.md');
+
+  let dshOverridePatchFile = null;
+  if (dshOverrideYaml) {
+    dshOverridePatchFile = path.join(runDir, 'dsh-override-patch.yml');
+    fs.writeFileSync(dshOverridePatchFile, dshOverrideYaml, 'utf8');
+  }
 
   let effectiveCwd = cwd;
   let worktreeInfo = null;
@@ -178,6 +226,8 @@ export async function executeRun(params) {
           mode,
           isGit: gitRepo,
           model,
+          effort,
+          threadSource: codexThreadSource,
           sessionId: null,
           lastMessageFile,
         })
@@ -185,18 +235,73 @@ export async function executeRun(params) {
           argsPrefix: backend.argsPrefix,
           useStoredCredentials,
           authPatchPath,
+          extraPatchPaths: dshOverridePatchFile ? [dshOverridePatchFile] : [],
           sessionId: null,
         });
 
-  const proc = await runProcess({
-    command: backend.command,
-    args,
-    cwd: effectiveCwd,
-    stdinText: fullPrompt,
-    timeoutMs: timeoutSec * 1000,
+  const startedAt = new Date().toISOString();
+  const artifacts = {
+    runDir,
+    promptFile,
     stdoutFile,
     stderrFile,
-  });
+    lastMessageFile: null,
+    diffFile: null,
+    dshOverridePatchFile,
+  };
+
+  const liveMeta = {
+    runId,
+    parentRunId: null,
+    worker,
+    status: 'running',
+    pid: null,
+    sessionId: null,
+    mode,
+    tier,
+    model,
+    effort,
+    threadSource: codexThreadSource,
+    isGit: gitRepo,
+    cwd,
+    effectiveCwd,
+    worktreeBranch: worktreeInfo?.branch || null,
+    worktreePath: worktreeInfo?.worktreePath || null,
+    useStoredCredentials: worker === 'dsh' ? useStoredCredentials : null,
+    timeoutSec,
+    warnings,
+    artifacts,
+    startedAt,
+    createdAt: startedAt,
+  };
+  saveRunMeta(runDir, liveMeta);
+
+  let proc;
+  try {
+    proc = await runProcess({
+      command: backend.command,
+      args,
+      cwd: effectiveCwd,
+      stdinText: fullPrompt,
+      timeoutMs: timeoutSec * 1000,
+      stdoutFile,
+      stderrFile,
+      onSpawn: (pid) => {
+        liveMeta.pid = pid;
+        saveRunMeta(runDir, liveMeta);
+      },
+    });
+  } catch (err) {
+    saveRunMeta(runDir, {
+      ...liveMeta,
+      status: 'error',
+      exitCode: 1,
+      timedOut: false,
+      errors: [err?.message || String(err)],
+      finishedAt: new Date().toISOString(),
+    });
+    throw err;
+  }
 
   const lastMessageContent = fs.existsSync(lastMessageFile)
     ? fs.readFileSync(lastMessageFile, 'utf8')
@@ -211,12 +316,14 @@ export async function executeRun(params) {
   }
 
   let changedFiles = [];
+  let preexistingDirtyFiles = [];
   let diffStat = '';
   let diffFile = null;
 
   if (gitRepo) {
     const gitChanges = computeGitChanges(effectiveCwd, gitBaseline);
     changedFiles = gitChanges.changedFiles;
+    preexistingDirtyFiles = gitChanges.preexistingDirtyFiles || [];
     diffStat = gitChanges.diffStat;
     if (gitChanges.diffPatch) {
       diffFile = path.join(runDir, 'diff.patch');
@@ -238,19 +345,26 @@ export async function executeRun(params) {
     turnEndReason: parsed.turnEndReason,
   });
 
+  const finishedAt = new Date().toISOString();
   const result = {
     runId,
     parentRunId: null,
     worker,
     status,
+    pid: liveMeta.pid,
     sessionId: parsed.sessionId,
     mode,
+    tier,
+    model,
+    effort,
+    threadSource: codexThreadSource,
     isGit: gitRepo,
     cwd,
     effectiveCwd,
     worktreeBranch: worktreeInfo?.branch || null,
     worktreePath: worktreeInfo?.worktreePath || null,
     useStoredCredentials: worker === 'dsh' ? useStoredCredentials : null,
+    timeoutSec,
     exitCode: proc.exitCode,
     timedOut: proc.timedOut,
     durationMs: proc.durationMs,
@@ -261,16 +375,16 @@ export async function executeRun(params) {
     warnings,
     summary: parsed.finalMessage,
     changedFiles,
+    preexistingDirtyFiles,
     diffStat,
     artifacts: {
-      runDir,
-      promptFile,
-      stdoutFile,
-      stderrFile,
+      ...artifacts,
       lastMessageFile: fs.existsSync(lastMessageFile) ? lastMessageFile : null,
       diffFile,
     },
-    createdAt: new Date().toISOString(),
+    startedAt,
+    finishedAt,
+    createdAt: finishedAt,
   };
 
   saveRunMeta(runDir, result);
@@ -303,8 +417,14 @@ export async function executeResume(params) {
   }
 
   const mode = parentMeta.mode || 'inplace';
+  const tier = params.tier || parentMeta.tier || 'standard';
   const gitRepo = Boolean(parentMeta.isGit);
-  const model = params.model ?? config?.models?.[worker] ?? null;
+  const model = params.model ?? parentMeta.model ?? config?.models?.[worker] ?? null;
+  const effort = params.effort ?? parentMeta.effort ?? null;
+  const codexThreadSource = worker === 'codex'
+    ? (parentMeta.threadSource ?? config?.defaults?.codexThreadSource ?? 'vscode')
+    : null;
+
   const useStoredCredentials =
     parentMeta.useStoredCredentials !== null && parentMeta.useStoredCredentials !== undefined
       ? Boolean(parentMeta.useStoredCredentials)
@@ -315,13 +435,20 @@ export async function executeResume(params) {
   const defaultTimeoutSec = Number(config?.defaults?.timeoutSec ?? 600);
   const timeoutSec = Math.min(
     maxTimeoutSec,
-    Math.max(10, Number(params.timeoutSec || defaultTimeoutSec))
+    Math.max(10, Number(params.timeoutSec || parentMeta.timeoutSec || defaultTimeoutSec))
   );
 
   const backend = resolveBackend(worker);
   const warnings = [];
-  if (worker === 'dsh' && model) {
-    warnings.push(`dsh headless profile does not support CLI --model override; ignoring "${model}".`);
+  let dshOverrideYaml = null;
+  if (worker === 'dsh' && (model || effort)) {
+    const base = params.dryRun ? { provider: 'deepseek-official', model: 'deepseek-flash' } : resolveDshDefaultModel(backend);
+    dshOverrideYaml = buildDshOverridePatchYaml({
+      model,
+      effort,
+      baseProvider: base.provider,
+      baseModel: base.model,
+    });
   }
 
   if (params.dryRun) {
@@ -333,6 +460,9 @@ export async function executeResume(params) {
       constraints: params.constraints,
     });
     const fakeLastMsg = path.join(stateDir, 'runs', '<run-id>', 'last-message.txt');
+    const fakeOverridePath = dshOverrideYaml
+      ? path.join(stateDir, 'runs', '<run-id>', 'dsh-override-patch.yml')
+      : null;
     const args =
       worker === 'codex'
         ? buildCodexArgs({
@@ -340,6 +470,8 @@ export async function executeResume(params) {
             mode,
             isGit: gitRepo,
             model,
+            effort,
+            threadSource: codexThreadSource,
             sessionId: parentMeta.sessionId,
             lastMessageFile: fakeLastMsg,
           })
@@ -347,6 +479,7 @@ export async function executeResume(params) {
             argsPrefix: backend.argsPrefix,
             useStoredCredentials,
             authPatchPath,
+            extraPatchPaths: fakeOverridePath ? [fakeOverridePath] : [],
             sessionId: parentMeta.sessionId,
           });
     return {
@@ -355,11 +488,16 @@ export async function executeResume(params) {
       sessionId: parentMeta.sessionId,
       worker,
       mode,
+      tier,
+      model,
+      effort,
+      threadSource: codexThreadSource,
       isGit: gitRepo,
       effectiveCwd,
       command: backend.command,
       args,
       timeoutSec,
+      dshOverridePatch: dshOverrideYaml || undefined,
       warnings,
       promptPreview: previewPrompt,
     };
@@ -371,6 +509,12 @@ export async function executeResume(params) {
   const stderrFile = path.join(runDir, 'stderr.log');
   const lastMessageFile = path.join(runDir, 'last-message.txt');
   const promptFile = path.join(runDir, 'prompt.md');
+
+  let dshOverridePatchFile = null;
+  if (dshOverrideYaml) {
+    dshOverridePatchFile = path.join(runDir, 'dsh-override-patch.yml');
+    fs.writeFileSync(dshOverridePatchFile, dshOverrideYaml, 'utf8');
+  }
 
   const gitBaseline = gitRepo ? getGitBaseline(effectiveCwd) : null;
   const beforeSnapshot = gitRepo ? null : captureFsSnapshot(effectiveCwd);
@@ -391,6 +535,8 @@ export async function executeResume(params) {
           mode,
           isGit: gitRepo,
           model,
+          effort,
+          threadSource: codexThreadSource,
           sessionId: parentMeta.sessionId,
           lastMessageFile,
         })
@@ -398,18 +544,73 @@ export async function executeResume(params) {
           argsPrefix: backend.argsPrefix,
           useStoredCredentials,
           authPatchPath,
+          extraPatchPaths: dshOverridePatchFile ? [dshOverridePatchFile] : [],
           sessionId: parentMeta.sessionId,
         });
 
-  const proc = await runProcess({
-    command: backend.command,
-    args,
-    cwd: effectiveCwd,
-    stdinText: fullPrompt,
-    timeoutMs: timeoutSec * 1000,
+  const startedAt = new Date().toISOString();
+  const artifacts = {
+    runDir,
+    promptFile,
     stdoutFile,
     stderrFile,
-  });
+    lastMessageFile: null,
+    diffFile: null,
+    dshOverridePatchFile,
+  };
+
+  const liveMeta = {
+    runId,
+    parentRunId: params.runId,
+    worker,
+    status: 'running',
+    pid: null,
+    sessionId: parentMeta.sessionId,
+    mode,
+    tier,
+    model,
+    effort,
+    threadSource: codexThreadSource,
+    isGit: gitRepo,
+    cwd: parentMeta.cwd,
+    effectiveCwd,
+    worktreeBranch: parentMeta.worktreeBranch || null,
+    worktreePath: parentMeta.worktreePath || null,
+    useStoredCredentials: worker === 'dsh' ? useStoredCredentials : null,
+    timeoutSec,
+    warnings,
+    artifacts,
+    startedAt,
+    createdAt: startedAt,
+  };
+  saveRunMeta(runDir, liveMeta);
+
+  let proc;
+  try {
+    proc = await runProcess({
+      command: backend.command,
+      args,
+      cwd: effectiveCwd,
+      stdinText: fullPrompt,
+      timeoutMs: timeoutSec * 1000,
+      stdoutFile,
+      stderrFile,
+      onSpawn: (pid) => {
+        liveMeta.pid = pid;
+        saveRunMeta(runDir, liveMeta);
+      },
+    });
+  } catch (err) {
+    saveRunMeta(runDir, {
+      ...liveMeta,
+      status: 'error',
+      exitCode: 1,
+      timedOut: false,
+      errors: [err?.message || String(err)],
+      finishedAt: new Date().toISOString(),
+    });
+    throw err;
+  }
 
   const lastMessageContent = fs.existsSync(lastMessageFile)
     ? fs.readFileSync(lastMessageFile, 'utf8')
@@ -424,12 +625,14 @@ export async function executeResume(params) {
   }
 
   let changedFiles = [];
+  let preexistingDirtyFiles = [];
   let diffStat = '';
   let diffFile = null;
 
   if (gitRepo) {
     const gitChanges = computeGitChanges(effectiveCwd, gitBaseline);
     changedFiles = gitChanges.changedFiles;
+    preexistingDirtyFiles = gitChanges.preexistingDirtyFiles || [];
     diffStat = gitChanges.diffStat;
     if (gitChanges.diffPatch) {
       diffFile = path.join(runDir, 'diff.patch');
@@ -451,19 +654,26 @@ export async function executeResume(params) {
     turnEndReason: parsed.turnEndReason,
   });
 
+  const finishedAt = new Date().toISOString();
   const result = {
     runId,
     parentRunId: params.runId,
     worker,
     status,
+    pid: liveMeta.pid,
     sessionId: parsed.sessionId || parentMeta.sessionId,
     mode,
+    tier,
+    model,
+    effort,
+    threadSource: codexThreadSource,
     isGit: gitRepo,
     cwd: parentMeta.cwd,
     effectiveCwd,
     worktreeBranch: parentMeta.worktreeBranch || null,
     worktreePath: parentMeta.worktreePath || null,
     useStoredCredentials: worker === 'dsh' ? useStoredCredentials : null,
+    timeoutSec,
     exitCode: proc.exitCode,
     timedOut: proc.timedOut,
     durationMs: proc.durationMs,
@@ -474,16 +684,16 @@ export async function executeResume(params) {
     warnings,
     summary: parsed.finalMessage,
     changedFiles,
+    preexistingDirtyFiles,
     diffStat,
     artifacts: {
-      runDir,
-      promptFile,
-      stdoutFile,
-      stderrFile,
+      ...artifacts,
       lastMessageFile: fs.existsSync(lastMessageFile) ? lastMessageFile : null,
       diffFile,
     },
-    createdAt: new Date().toISOString(),
+    startedAt,
+    finishedAt,
+    createdAt: finishedAt,
   };
 
   saveRunMeta(runDir, result);

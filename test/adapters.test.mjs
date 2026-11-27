@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildCodexArgs, parseCodexJsonl } from '../src/adapters/codex.mjs';
-import { buildDshArgs, parseDshJsonl } from '../src/adapters/dsh.mjs';
+import { buildDshArgs, buildDshOverridePatchYaml, parseDshJsonl } from '../src/adapters/dsh.mjs';
 import { determineStatus } from '../src/execute.mjs';
 
-test('codex new run args include -C, -s, and --skip-git-repo-check when non-git', () => {
+test('codex new run args include -C, -s, effort, threadSource, and --skip-git-repo-check when non-git', () => {
   const args = buildCodexArgs({
     cwd: 'C:\\repo',
     mode: 'readonly',
     isGit: false,
     model: 'gpt-5',
+    effort: 'medium',
+    threadSource: 'vscode',
     sessionId: null,
     lastMessageFile: 'C:\\out\\last.txt',
   });
@@ -25,16 +27,22 @@ test('codex new run args include -C, -s, and --skip-git-repo-check when non-git'
     '--skip-git-repo-check',
     '-m',
     'gpt-5',
+    '-c',
+    'model_reasoning_effort="medium"',
+    '--thread-source',
+    'vscode',
     '-',
   ]);
 });
 
-test('codex resume args omit -C and -s and pass sessionId before -', () => {
+test('codex resume args omit -C and -s, include effort and threadSource, and pass sessionId before -', () => {
   const args = buildCodexArgs({
     cwd: 'C:\\repo',
     mode: 'inplace',
     isGit: true,
     model: null,
+    effort: 'high',
+    threadSource: 'vscode',
     sessionId: '01900000-0000-7000-8000-000000000001',
     lastMessageFile: 'C:\\out\\last.txt',
   });
@@ -43,6 +51,8 @@ test('codex resume args omit -C and -s and pass sessionId before -', () => {
   assert.ok(!args.includes('-C'));
   assert.ok(!args.includes('-s'));
   assert.ok(!args.includes('--skip-git-repo-check'));
+  assert.ok(args.includes('model_reasoning_effort="high"'));
+  assert.ok(args.includes('--thread-source'));
   assert.equal(args.at(-2), '01900000-0000-7000-8000-000000000001');
   assert.equal(args.at(-1), '-');
 });
@@ -65,11 +75,25 @@ test('parseCodexJsonl extracts sessionId, usage, toolCalls, and prefers -o last 
   assert.equal(withoutFile.finalMessage, 'from stream');
 });
 
-test('dsh args put launcher flags before app flags and include --patch when enabled', () => {
+test('buildDshOverridePatchYaml generates Cordis patch with required provider/model and effort', () => {
+  assert.equal(buildDshOverridePatchYaml({ model: null, effort: null }), null);
+  const effortOnly = buildDshOverridePatchYaml({ model: null, effort: 'high' });
+  assert.ok(effortOnly.includes('provider: "deepseek-official"'));
+  assert.ok(effortOnly.includes('model: "deepseek-flash"'));
+  assert.ok(effortOnly.includes('reasoningEffort: "high"'));
+
+  const withProvider = buildDshOverridePatchYaml({ model: 'tencent-tokenhub:deepseek-v4-pro', effort: 'max' });
+  assert.ok(withProvider.includes('provider: "tencent-tokenhub"'));
+  assert.ok(withProvider.includes('model: "deepseek-v4-pro"'));
+  assert.ok(withProvider.includes('reasoningEffort: "max"'));
+});
+
+test('dsh args put launcher flags and multiple --patch overlays before --json', () => {
   const args = buildDshArgs({
     argsPrefix: ['C:\\dsh\\bin.js'],
     useStoredCredentials: true,
     authPatchPath: 'C:\\cfg\\dsh-auth-patch.yml',
+    extraPatchPaths: ['C:\\runs\\1\\dsh-override-patch.yml'],
     sessionId: 'session-123',
   });
   assert.deepEqual(args, [
@@ -78,12 +102,14 @@ test('dsh args put launcher flags before app flags and include --patch when enab
     'headless',
     '--patch',
     'C:\\cfg\\dsh-auth-patch.yml',
+    '--patch',
+    'C:\\runs\\1\\dsh-override-patch.yml',
     '--json',
     '--session-id',
     'session-123',
     '-',
   ]);
-  assert.ok(args.indexOf('--patch') < args.indexOf('--json'));
+  assert.ok(args.lastIndexOf('--patch') < args.indexOf('--json'));
 });
 
 test('parseDshJsonl parses session, step_end usage sum, turn_end, final, and error', () => {

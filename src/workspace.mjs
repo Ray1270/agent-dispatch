@@ -153,12 +153,12 @@ export function computeGitChanges(cwd, baseline) {
   const currentMap = parsePorcelain(statusRes.stdout);
   const preexisting = baseline?.preexistingDirtyFiles || {};
 
-  const changedFiles = [];
+  const fileStatuses = [];
   for (const [file, status] of currentMap.entries()) {
     if (!(file in preexisting) || preexisting[file] !== status) {
-      changedFiles.push({ path: file, status: status.trim() || status });
+      fileStatuses.push({ path: file, status: status.trim() || status });
     } else {
-      changedFiles.push({ path: file, status: status.trim() || status, preexisting: true });
+      fileStatuses.push({ path: file, status: status.trim() || status, preexisting: true });
     }
   }
 
@@ -166,8 +166,9 @@ export function computeGitChanges(cwd, baseline) {
   const diffPatchRes = runGit(cwd, ['diff', 'HEAD'], true);
 
   return {
-    changedFiles: changedFiles.map((c) => c.path),
-    fileStatuses: changedFiles,
+    changedFiles: fileStatuses.filter((c) => !c.preexisting).map((c) => c.path),
+    preexistingDirtyFiles: fileStatuses.filter((c) => c.preexisting).map((c) => c.path),
+    fileStatuses,
     diffStat: (diffStatRes.stdout || '').trim(),
     diffPatch: diffPatchRes.stdout || '',
   };

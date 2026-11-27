@@ -18,14 +18,46 @@ test('recommendRoute routes <=2 low-risk files to self', () => {
   assert.equal(res.requiresConfirmation, false);
 });
 
-test('recommendRoute routes refactoring and test tasks to codex', () => {
-  const res = recommendRoute(
-    { task: '重构认证模块并补充单元测试', cwd: os.tmpdir(), filesCount: 6, risk: 'medium' },
+test('recommendRoute assigns standard and heavy tiers with effort and timeout for codex', () => {
+  const standard = recommendRoute(
+    { task: '重构认证模块并补充单元测试', cwd: os.tmpdir(), filesCount: 3, risk: 'medium' },
     config
   );
-  assert.equal(res.worker, 'codex');
-  assert.equal(res.fallback, 'dsh');
-  assert.equal(res.requiresConfirmation, true);
+  assert.equal(standard.worker, 'codex');
+  assert.equal(standard.tier, 'standard');
+  assert.equal(standard.effort, 'high');
+  assert.equal(standard.timeoutSec, 600);
+
+  const heavy = recommendRoute(
+    { task: '大重构核心状态机', cwd: os.tmpdir(), filesCount: 8, risk: 'high' },
+    config
+  );
+  assert.equal(heavy.worker, 'codex');
+  assert.equal(heavy.tier, 'heavy');
+  assert.equal(heavy.effort, 'ultra');
+  assert.equal(heavy.timeoutSec, 1200);
+});
+
+test('recommendRoute assigns light tier for readonly codex and honors explicit model/effort overrides', () => {
+  const light = recommendRoute(
+    { task: 'Code review auth module', cwd: os.tmpdir(), mode: 'readonly', forceWorker: 'codex' },
+    config
+  );
+  assert.equal(light.tier, 'light');
+  assert.equal(light.effort, 'medium');
+
+  const overridden = recommendRoute(
+    {
+      task: '实现新模块',
+      cwd: os.tmpdir(),
+      forceWorker: 'dsh',
+      model: 'deepseek-v4-pro',
+      effort: 'max',
+    },
+    config
+  );
+  assert.equal(overridden.model, 'deepseek-v4-pro');
+  assert.equal(overridden.effort, 'max');
 });
 
 test('recommendRoute routes automation script and Chinese doc summary to dsh', () => {

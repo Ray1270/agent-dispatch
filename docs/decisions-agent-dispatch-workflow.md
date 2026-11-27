@@ -7,7 +7,7 @@
 
 ---
 
-## 已确定决策（D1–D11）
+## 已确定决策（D1–D12）
 
 | # | 主题 | 结论 | 理由 |
 |---|---|---|---|
@@ -21,12 +21,13 @@
 | D8 | `dsh` 认证 | 派发脚本通过临时 `--patch` 启用 `credentials` / `authorization` / `deepseek-account`，直接复用现有登录态 | 免配独立 API Key，且不污染全局 `headless` profile |
 | D9 | 超时与运行记录 | 默认超时 10 分钟（派发单可调，上限 30 分钟），超时强杀进程树并保现场；日志/diff/`session_id` 统一存 `~/.agent-dispatch/runs/` | 不污染目标项目仓库，便于续跑与排查 |
 | D10 | 非 Git 边界与技术栈 | 非 Git 目录允许派发（写操作前显式预警 + 文件前后快照核对）；工具源码用零重依赖 Node.js ESM，放在 `scratch/agent-dispatch`，全局 Skill 装到 `~/.gemini/config/skills/agent-dispatch/` | 复用本机 Node 24，零外部依赖，全工作区随时可触发 |
-| D11 | 默认路由初版 | 主模型直做（纯问答/设计、≤2 文件小改、派发前分析与派发后验收）；`codex`（中大型编码、重构、测试、严格沙箱改代码、Code Review）；`dsh`（通用脚本、调研文档、中文重上下文、dsh 生态任务及兜底）；默认继承各自配置模型 | 符合当前使用习惯，后续可随时修改 `~/.agent-dispatch/routing.json` |
+| D11 | 默认路由初版 | 主模型直做（纯问答/设计、≤2 文件小改、派发前分析与派发后验收）；`codex`（中大型编码、重构、测试、沙箱改代码、Code Review）；`dsh`（通用脚本、调研文档、中文重上下文、dsh 生态任务及兜底）；默认继承各自配置模型 | 符合当前使用习惯，后续可随时修改 `~/.agent-dispatch/routing.json` |
+| D12 | 模型/思考分档、实时看板与桌面端可见性 | 新增 `tiers`（`light`/`standard`/`heavy`）与 `--model`/`--effort` 按次覆盖（Codex `-m` + `-c model_reasoning_effort` + `--thread-source vscode`；DSH 临时 `--patch` 覆写 `agent-default-model`）；新增 `ui`/`watch` 实时看板并从 `changedFiles` 过滤已有脏文件 | 避免 Codex 全局 `ultra` 易超时，提供统一实时进度可视化，且不污染已有 Git 基线 |
 
 ---
 
 ## 暂未确定 / 留待实战观察项
 
 1. 跑顺十来次后，是否对低风险任务放宽为「免确认自动派发」。
-2. 后续是否需要将统一 JSON 协议再包一层 MCP Server 或本地 Web 看板。
+2. 后续是否需要将统一 JSON 协议再包一层 MCP Server 或更丰富的前端看板。
 3. 实战使用一段时间后，是否需要微调 `routing.json` 规则权重或为特定任务固定模型。

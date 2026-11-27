@@ -6,7 +6,7 @@ function includesAny(textLower, keywords = []) {
 }
 
 /**
- * Evaluate routing rules to recommend worker, fallback, isolation mode, analysis depth, and timeout.
+ * Evaluate routing rules to recommend worker, fallback, isolation mode, tier, model, effort, analysis depth, and timeout.
  * @param {object} input
  * @param {string} input.task
  * @param {string} [input.cwd]
@@ -14,6 +14,8 @@ function includesAny(textLower, keywords = []) {
  * @param {'low'|'medium'|'high'} [input.risk]
  * @param {'self'|'codex'|'dsh'} [input.forceWorker]
  * @param {'readonly'|'inplace'|'worktree'} [input.mode]
+ * @param {string} [input.model]
+ * @param {string} [input.effort]
  * @param {Record<string, any>} config
  */
 export function recommendRoute(input, config) {
@@ -94,16 +96,23 @@ export function recommendRoute(input, config) {
     reasons.push('默认开发任务优先由 codex 承担，dsh 作为备选兜底');
   }
 
-  // 3. Determine analysis depth & timeout
-  const isComplex =
+  // 3. Determine tier, model, effort, analysis depth & timeout
+  const isHeavy =
     input.risk === 'high' ||
     isolation === 'worktree' ||
     (typeof input.filesCount === 'number' && input.filesCount >= 5) ||
     task.length > 300;
-  const analysisDepth = isComplex ? 'medium-design' : 'light-recon';
+  const isLight = !isHeavy && isolation === 'readonly';
+  const tier = isHeavy ? 'heavy' : isLight ? 'light' : 'standard';
+
+  const tierConfig = (worker !== 'self' && config?.tiers?.[worker]?.[tier]) || {};
+  const model = input.model ?? tierConfig.model ?? (worker !== 'self' ? config?.models?.[worker] : null) ?? null;
+  const effort = input.effort ?? tierConfig.effort ?? null;
+
+  const analysisDepth = isHeavy ? 'medium-design' : 'light-recon';
   const timeoutSec = Math.min(
     maxTimeoutSec,
-    isComplex ? Math.max(defaultTimeoutSec, 1200) : defaultTimeoutSec
+    Number(tierConfig.timeoutSec || (isHeavy ? Math.max(defaultTimeoutSec, 1200) : defaultTimeoutSec))
   );
 
   const fallback = worker === 'self' ? null : (fallbackMap[worker] || null);
@@ -116,6 +125,9 @@ export function recommendRoute(input, config) {
     fallback,
     isolation,
     sandbox,
+    tier,
+    model,
+    effort,
     isGit: gitRepo,
     cwd,
     analysisDepth,

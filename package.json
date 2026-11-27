@@ -11,7 +11,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "doctor": "node bin/dispatch.mjs doctor"
+    "doctor": "node bin/dispatch.mjs doctor",
+    "ui": "node bin/dispatch.mjs ui"
   },
   "license": "MIT"
 }

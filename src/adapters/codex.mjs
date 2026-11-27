@@ -6,15 +6,28 @@
  * @param {'readonly'|'inplace'|'worktree'} options.mode
  * @param {boolean} options.isGit
  * @param {string | null} [options.model]
+ * @param {string | null} [options.effort]
+ * @param {string | null} [options.threadSource]
  * @param {string | null} [options.sessionId]
  * @param {string} options.lastMessageFile
  * @returns {string[]}
  */
-export function buildCodexArgs({ cwd, mode, isGit, model, sessionId, lastMessageFile }) {
+export function buildCodexArgs({
+  cwd,
+  mode,
+  isGit,
+  model,
+  effort,
+  threadSource,
+  sessionId,
+  lastMessageFile,
+}) {
   if (sessionId) {
     const args = ['exec', 'resume', '--json', '-o', lastMessageFile];
     if (!isGit) args.push('--skip-git-repo-check');
     if (model) args.push('-m', model);
+    if (effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(String(effort))}`);
+    if (threadSource) args.push('--thread-source', String(threadSource));
     args.push(sessionId, '-');
     return args;
   }
@@ -23,6 +36,8 @@ export function buildCodexArgs({ cwd, mode, isGit, model, sessionId, lastMessage
   const args = ['exec', '--json', '-o', lastMessageFile, '-C', cwd, '-s', sandbox];
   if (!isGit) args.push('--skip-git-repo-check');
   if (model) args.push('-m', model);
+  if (effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(String(effort))}`);
+  if (threadSource) args.push('--thread-source', String(threadSource));
   args.push('-');
   return args;
 }

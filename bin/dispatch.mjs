@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import { ensureUserConfig, getStateDir, loadConfig } from '../src/config.mjs';
+import { startDashboard } from '../src/dashboard.mjs';
 import { runDoctor } from '../src/discovery.mjs';
+import { isPidAlive, parseLiveRunProgress } from '../src/events.mjs';
 import { cleanupRunWorktree, executeResume, executeRun } from '../src/execute.mjs';
 import { recommendRoute } from '../src/router.mjs';
 import { listRuns, loadRunMeta } from '../src/store.mjs';
@@ -65,18 +67,59 @@ function printJson(obj, exitCode = 0) {
 }
 
 function printHelp() {
-  const text = `agent-dispatch - Analyze, route, execute, and archive codex / dsh tasks
+  const text = `agent-dispatch - Analyze, route, execute, monitor, and archive codex / dsh tasks
 
 Usage:
   dispatch doctor
-  dispatch route --task <text> [--task-file <path>] [--cwd <dir>] [--files-count <n>] [--risk low|medium|high] [--mode readonly|inplace|worktree] [--worker self|codex|dsh]
-  dispatch run --worker codex|dsh (--task <text> | --task-file <path>) [--cwd <dir>] [--mode readonly|inplace|worktree] [--timeout <sec>] [--model <name>] [--constraint <text>] [--no-dsh-stored-auth] [--dry-run]
-  dispatch resume --run-id <id> (--task <text> | --task-file <path>) [--timeout <sec>] [--model <name>] [--constraint <text>] [--dry-run]
+  dispatch route --task <text> [--task-file <path>] [--cwd <dir>] [--files-count <n>] [--risk low|medium|high] [--mode readonly|inplace|worktree] [--worker self|codex|dsh] [--model <id>] [--effort <level>]
+  dispatch run --worker codex|dsh (--task <text> | --task-file <path>) [--cwd <dir>] [--mode readonly|inplace|worktree] [--tier light|standard|heavy] [--timeout <sec>] [--model <id>] [--effort <level>] [--constraint <text>] [--no-dsh-stored-auth] [--dry-run]
+  dispatch resume --run-id <id> (--task <text> | --task-file <path>) [--timeout <sec>] [--model <id>] [--effort <level>] [--constraint <text>] [--dry-run]
   dispatch inspect --run-id <id>
   dispatch list [--limit <n>]
+  dispatch watch [--run-id <id>] [--interval <ms>]
+  dispatch ui [--port <n>] [--host <ip>]
   dispatch cleanup-worktree --run-id <id> [--force-branch]
 `;
   process.stdout.write(text);
+}
+
+async function runWatch(stateDir, runIdFlag, intervalMs) {
+  let targetId = runIdFlag ? String(runIdFlag) : null;
+  if (!targetId) {
+    const runs = listRuns(stateDir, 20);
+    const active = runs.find((r) => r.status === 'running') || runs[0];
+    if (!active) {
+      throw new Error('No runs found to watch.');
+    }
+    targetId = active.runId;
+  }
+
+  let seenIndex = 0;
+  process.stdout.write(`Watching run ${targetId}...\n`);
+  while (true) {
+    const meta = loadRunMeta(stateDir, targetId);
+    const progress = parseLiveRunProgress(meta, { maxEvents: 500 });
+    for (const ev of progress.events) {
+      if (ev.index > seenIndex) {
+        seenIndex = ev.index;
+        const suffix = ev.detail ? `: ${ev.detail}` : '';
+        process.stdout.write(`[#${ev.index} ${ev.kind}] ${ev.title}${suffix}\n`);
+      }
+    }
+    if (meta.status !== 'running') {
+      process.stdout.write(
+        `\nFinished: status=${meta.status} durationMs=${meta.durationMs} toolCalls=${meta.toolCalls ?? progress.toolCalls}\n`
+      );
+      process.exitCode = meta.status === 'ok' ? 0 : 1;
+      return;
+    }
+    if (meta.pid && !isPidAlive(meta.pid)) {
+      process.stdout.write('\nProcess no longer alive while meta.status=running.\n');
+      process.exitCode = 1;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
 }
 
 async function main() {
@@ -106,6 +149,8 @@ async function main() {
         risk: flags.risk,
         forceWorker: flags.worker,
         mode: flags.mode,
+        model: typeof flags.model === 'string' ? flags.model : undefined,
+        effort: typeof flags.effort === 'string' ? flags.effort : undefined,
       },
       config
     );
@@ -119,8 +164,10 @@ async function main() {
       worker: flags.worker,
       cwd: flags.cwd,
       mode: flags.mode,
+      tier: typeof flags.tier === 'string' ? flags.tier : undefined,
       timeoutSec: flags.timeout !== undefined ? Number(flags.timeout) : undefined,
       model: typeof flags.model === 'string' ? flags.model : undefined,
+      effort: typeof flags.effort === 'string' ? flags.effort : undefined,
       task,
       constraints: Array.isArray(flags.constraint) ? flags.constraint : [],
       useDshStoredAuth: flags['no-dsh-stored-auth'] ? false : undefined,
@@ -141,6 +188,7 @@ async function main() {
       task,
       timeoutSec: flags.timeout !== undefined ? Number(flags.timeout) : undefined,
       model: typeof flags.model === 'string' ? flags.model : undefined,
+      effort: typeof flags.effort === 'string' ? flags.effort : undefined,
       constraints: Array.isArray(flags.constraint) ? flags.constraint : [],
       dryRun: Boolean(flags['dry-run']),
     });
@@ -162,6 +210,20 @@ async function main() {
     const limit = flags.limit !== undefined ? Number(flags.limit) : 20;
     const runs = listRuns(stateDir, limit);
     printJson({ count: runs.length, runs }, 0);
+    return;
+  }
+
+  if (command === 'watch') {
+    const intervalMs = flags.interval !== undefined ? Math.max(300, Number(flags.interval)) : 1500;
+    await runWatch(stateDir, flags['run-id'], intervalMs);
+    return;
+  }
+
+  if (command === 'ui') {
+    const port = flags.port !== undefined ? Number(flags.port) : Number(config?.defaults?.dashboardPort ?? 4310);
+    const host = typeof flags.host === 'string' ? flags.host : '127.0.0.1';
+    const { url } = await startDashboard({ stateDir, host, port });
+    process.stdout.write(JSON.stringify({ url, host, port, stateDir }, null, 2) + '\n');
     return;
   }
 

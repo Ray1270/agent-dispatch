@@ -72,3 +72,28 @@ test('git baseline, worktree creation, diff, and safe cleanup work on a real git
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('computeGitChanges excludes preexisting dirty files from changedFiles', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-dirty-'));
+  try {
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root, stdio: 'ignore' });
+    fs.writeFileSync(path.join(root, 'dirty.txt'), 'v1\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'clean.txt'), 'v1\n', 'utf8');
+    execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: root, stdio: 'ignore' });
+
+    fs.writeFileSync(path.join(root, 'dirty.txt'), 'preexisting edit\n', 'utf8');
+    const baseline = getGitBaseline(root);
+
+    fs.writeFileSync(path.join(root, 'clean.txt'), 'worker edit\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'newfile.txt'), 'created\n', 'utf8');
+    const changes = computeGitChanges(root, baseline);
+
+    assert.deepEqual(changes.changedFiles.sort(), ['clean.txt', 'newfile.txt']);
+    assert.deepEqual(changes.preexistingDirtyFiles, ['dirty.txt']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

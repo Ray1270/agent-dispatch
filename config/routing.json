@@ -4,6 +4,8 @@
     "maxTimeoutSec": 1800,
     "useDshStoredCredentials": true,
     "selfMaxFiles": 2,
+    "codexThreadSource": "vscode",
+    "dashboardPort": 4310,
     "defaultFallback": {
       "codex": "dsh",
       "dsh": "codex"
@@ -12,6 +14,42 @@
   "models": {
     "codex": null,
     "dsh": null
+  },
+  "tiers": {
+    "codex": {
+      "light": {
+        "model": null,
+        "effort": "medium",
+        "timeoutSec": 600
+      },
+      "standard": {
+        "model": null,
+        "effort": "high",
+        "timeoutSec": 600
+      },
+      "heavy": {
+        "model": null,
+        "effort": "ultra",
+        "timeoutSec": 1200
+      }
+    },
+    "dsh": {
+      "light": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "standard": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "heavy": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 1200
+      }
+    }
   },
   "workers": {
     "self": {

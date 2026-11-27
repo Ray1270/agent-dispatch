@@ -46,12 +46,13 @@ node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" route --cwd "<目标目录>" --tas
 ### 📋 派发确认单
 - **任务目标**：一句话说明要做成什么
 - **推荐执行者**：`codex` 或 `dsh`（附一句理由；备选兜底：`xxx`）
+- **模型与思考强度**：例如 `codex 默认模型 (effort: high)` 或 `dsh 默认模型`（支持按次指定 `--model` / `--effort`）
 - **工作目录与隔离**：`<cwd>`｜`readonly` / `inplace` / `worktree`（若非 Git 且涉及写操作，标出警告）
-- **超时上限**：默认 10 分钟（600s，可按需调整，上限 1800s）
+- **超时上限**：默认 10 分钟（600s；heavy 档 1200s，可按需调整，上限 1800s）
 - **硬性禁止**：禁止 `git push`、禁止删分支/强推、禁止修改项目外全局配置
 - **验收方式**：完成后我会查看 diff/快照，并实际运行 `<具体测试/检查命令>` 验收
 
-回复「确认」立即派发，或直接说想改哪一项。
+回复「确认」立即派发，或直接说想改哪一项（例如「改用 dsh」「effort 调成 ultra」「模型换 xxx」）。
 ```
 
 ## 4. 构造任务书并执行派发
@@ -67,12 +68,13 @@ node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" route --cwd "<目标目录>" --tas
 执行派发：
 
 ```powershell
-node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" run --worker <codex|dsh> --mode <readonly|inplace|worktree> --cwd "<目标目录>" --timeout <秒> --task-file "<任务书路径>"
+node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" run --worker <codex|dsh> --mode <readonly|inplace|worktree> --cwd "<目标目录>" --timeout <秒> [--model <模型>] [--effort <强度>] --task-file "<任务书路径>"
 ```
 
-说明：
-- `dsh` 认证：脚本默认通过 `--patch` 自动接通本机已登录的 `~/.dsh/.credentials.yaml`，无需另配 Key。
+说明与实时进度查看：
+- `dsh` 认证：脚本默认通过 `--patch` 自动接通本机已登录的 `~/.dsh/.credentials.yaml`，无需另配 Key；若指定 `--model` / `--effort`，会生成单次临时 patch 覆盖默认模型。
 - 过程日志、diff、提示词与 `sessionId` 均持久化在 `~/.agent-dispatch/runs/<runId>/`。
+- 实时进度：用户可运行 `node "<AGENT_DISPATCH_ROOT>/bin/dispatch.mjs" ui` 打开 `http://127.0.0.1:4310` 查看统一实时看板，或运行 `watch` 在终端流式跟踪。
 
 ## 5. 实证验收与如实汇报
 

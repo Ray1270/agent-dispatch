@@ -34,17 +34,29 @@ npm test
 # 3. 获取任务路由建议
 node bin/dispatch.mjs route --cwd "/path/to/repo" --task "重构登录模块并补充测试"
 
-# 4. 派发任务（支持 --dry-run 预览命令）
-node bin/dispatch.mjs run --worker codex --mode readonly --cwd "/path/to/repo" --task "检查项目结构"
+# 4. 派发任务（支持 --dry-run 预览命令，可按需覆盖 --model 与 --effort）
+node bin/dispatch.mjs run --worker codex --mode readonly --effort medium --cwd "/path/to/repo" --task "检查项目结构"
 
-# 5. 基于 runId 续派同一会话
+# 5. 打开实时进度网页看板 / 终端实时跟踪
+node bin/dispatch.mjs ui
+node bin/dispatch.mjs watch
+
+# 6. 基于 runId 续派同一会话
 node bin/dispatch.mjs resume --run-id "<run-id>" --task "继续修复剩余报错"
 
-# 6. 查看最近运行记录 / 检查单次详情 / 清理 worktree
+# 7. 查看最近运行记录 / 检查单次详情 / 清理 worktree
 node bin/dispatch.mjs list --limit 10
 node bin/dispatch.mjs inspect --run-id "<run-id>"
 node bin/dispatch.mjs cleanup-worktree --run-id "<run-id>"
 ```
+
+## 模型、思考强度与实时看板
+
+- **默认继承 + 分档调节**：`routing.json` 中 `models.codex` / `models.dsh` 默认为 `null`（继承本机各自默认配置）；`tiers` 支持按 `light`（只读）、`standard`（常规）、`heavy`（高风险/worktree/大任务）自动选择思考强度与超时（例如 Codex 默认 `medium` / `high` / `ultra`，heavy 自动 1200s）。
+- **单次覆盖**：通过 `--model <id>` 与 `--effort <level>` 可覆盖任意一次 `run` 或 `resume`：
+  - `codex` 通过 `-m` 与 `-c model_reasoning_effort=...` 传递，并默认附带 `--thread-source vscode` 便于在桌面端查看会话；
+  - `dsh` 通过单次临时 `--patch` 覆写 `agent-default-model` 的 `model` / `reasoningEffort`，不影响全局配置。
+- **实时看板（`ui` / `watch`）**：运行 `npm run ui`（默认 `http://127.0.0.1:4310`）可在浏览器统一查看 Codex 与 DSH 的实时步骤流、耗时进度条、工具调用与变更清单。
 
 ## 配置与状态目录
 
