@@ -51,6 +51,13 @@ node bin/dispatch.mjs cleanup-worktree --run-id "<run-id>"
 - 运行时状态、历史记录（`runs/`）、临时工作树（`worktrees/`）以及可编辑的 `routing.json` 默认保存在 `~/.agent-dispatch/`。
 - 如需迁移出默认目录（例如挪到其他磁盘），设置环境变量 `AGENT_DISPATCH_HOME` 指向目标目录即可。
 
-## 安装 Antigravity Skill
+## 安装 Antigravity 插件（推荐，支持主动触发与一键开关）
 
-将 [`skill/SKILL.md`](skill/SKILL.md) 复制到全局 Skill 目录 `~/.gemini/config/skills/agent-dispatch/SKILL.md`，并将文中的 `<AGENT_DISPATCH_ROOT>` 替换为本仓库的实际本地路径。
+将 [`plugin/`](plugin/) 目录整体复制到 `~/.gemini/config/plugins/agent-dispatch/`，并把 `skills/agent-dispatch/SKILL.md` 中的 `<AGENT_DISPATCH_ROOT>` 替换为本仓库的实际本地路径。
+
+安装后包含：
+- `rules/AGENTS.md`：常驻轻量规则，让主模型遇到中大型编码、重构、测试、脚本或调研任务时**主动进入派发分析并给出确认单**（无需每次手动提醒）。
+- `skills/agent-dispatch/SKILL.md`：完整的分析、派发、验收与返工流程。
+- 在 Antigravity 插件设置中可随时一键开启/关闭。
+
+如果不需要自动触发规则、只想手动按需调用，也可以只把 [`skill/SKILL.md`](skill/SKILL.md) 复制到 `~/.gemini/config/skills/agent-dispatch/SKILL.md`（同样替换 `<AGENT_DISPATCH_ROOT>`）。

@@ -1,6 +1,6 @@
 ---
 name: agent-dispatch
-description: 由主模型分析任务、出派发单确认后，分流派发给 Codex CLI 或 DeepSeek Harness (dsh) 非交互执行，并在完成后实证验收。当用户要求"派发给 codex / dsh"、"用工作流分工执行"、"省额度让 codex/dsh 干活"、或希望先分析拆解再由外部 agent 编码/调研/写脚本时使用。
+description: 由主模型分析任务、出派发单确认后，分流派发给 Codex CLI 或 DeepSeek Harness (dsh) 非交互执行，并在完成后实证验收。当用户要求"派发给 codex / dsh"、"用工作流分工执行"、"省额度让 codex/dsh 干活"，或遇到中大型编码实现、跨文件重构、测试编写、Code Review、自动化脚本、调研总结/文档任务时主动触发使用。
 ---
 
 # Agent Dispatch 工作流（Antigravity + Codex + DSH）

@@ -1,0 +1,12 @@
+{
+  "name": "agent-dispatch",
+  "displayName": "Agent Dispatch (Codex & DSH)",
+  "version": "0.1.0",
+  "description": "Proactively analyze medium/large tasks, confirm a dispatch brief, execute via Codex CLI or DeepSeek Harness (dsh), and verify changes with evidence.",
+  "repository": "https://github.com/Ray1270/agent-dispatch",
+  "suggestedPrompts": [
+    "检查 codex 和 dsh 派发环境状态",
+    "分析这个需求并出派发确认单（分流给 codex 或 dsh）",
+    "查看最近几次 agent-dispatch 的运行记录和变更"
+  ]
+}
