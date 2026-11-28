@@ -1,8 +1,8 @@
 {
   "name": "agent-dispatch",
-  "displayName": "Agent Dispatch (Codex & DSH)",
-  "version": "0.1.0",
-  "description": "Proactively analyze medium/large tasks, confirm a dispatch brief, execute via Codex CLI or DeepSeek Harness (dsh), and verify changes with evidence.",
+  "displayName": "Agent Dispatch",
+  "version": "0.2.0",
+  "description": "Proactively analyze medium/large tasks, confirm a dispatch brief, execute via Codex, DSH, Claude Code, Gemini CLI, or Qwen Code, and verify changes with evidence.",
   "repository": "https://github.com/Ray1270/agent-dispatch",
   "suggestedPrompts": [
     "检查 codex 和 dsh 派发环境状态",

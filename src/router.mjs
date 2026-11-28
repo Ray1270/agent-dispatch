@@ -1,8 +1,22 @@
 import path from 'node:path';
+import { hasAdapter, listAdapterIds } from './adapters/index.mjs';
 import { isGitRepo } from './workspace.mjs';
 
 function includesAny(textLower, keywords = []) {
   return keywords.filter((kw) => textLower.includes(String(kw).toLowerCase()));
+}
+
+function getSandboxLabel(worker, isolation) {
+  if (worker === 'codex') {
+    return isolation === 'readonly' ? 'read-only' : 'workspace-write';
+  }
+  if (worker === 'claude') {
+    return isolation === 'readonly' ? 'plan' : 'acceptEdits';
+  }
+  if (worker === 'gemini' || worker === 'qwen') {
+    return isolation === 'readonly' ? 'plan' : 'auto_edit';
+  }
+  return isolation === 'readonly' ? 'prompt-readonly' : 'workspace-default';
 }
 
 /**
@@ -12,7 +26,7 @@ function includesAny(textLower, keywords = []) {
  * @param {string} [input.cwd]
  * @param {number} [input.filesCount]
  * @param {'low'|'medium'|'high'} [input.risk]
- * @param {'self'|'codex'|'dsh'} [input.forceWorker]
+ * @param {string} [input.forceWorker]
  * @param {'readonly'|'inplace'|'worktree'} [input.mode]
  * @param {string} [input.model]
  * @param {string} [input.effort]
@@ -30,12 +44,21 @@ export function recommendRoute(input, config) {
   const defaultTimeoutSec = Number(config?.defaults?.timeoutSec ?? 600);
   const maxTimeoutSec = Number(config?.defaults?.maxTimeoutSec ?? 1800);
   const fallbackMap = config?.defaults?.defaultFallback || { codex: 'dsh', dsh: 'codex' };
+  const enabledWorkers = (
+    Array.isArray(config?.defaults?.enabledWorkers) && config.defaults.enabledWorkers.length
+      ? config.defaults.enabledWorkers
+      : ['codex', 'dsh']
+  ).filter((id) => hasAdapter(id));
 
   const readonlyHits = includesAny(taskLower, config?.isolation?.readonlyKeywords || []);
   const worktreeHits = includesAny(taskLower, config?.isolation?.worktreeKeywords || []);
   const selfHits = includesAny(taskLower, config?.workers?.self?.keywords || []);
-  const codexHits = includesAny(taskLower, config?.workers?.codex?.keywords || []);
-  const dshHits = includesAny(taskLower, config?.workers?.dsh?.keywords || []);
+
+  const workerHits = {};
+  for (const id of listAdapterIds()) {
+    workerHits[id] = includesAny(taskLower, config?.workers?.[id]?.keywords || []);
+  }
+  const anyEnabledWorkerKeywordHit = enabledWorkers.some((id) => (workerHits[id]?.length || 0) > 0);
 
   // 1. Determine isolation mode
   let isolation = input.mode || null;
@@ -47,7 +70,13 @@ export function recommendRoute(input, config) {
       } else {
         warnings.push('高风险改动但当前目录不是 Git 仓库，无法创建 worktree，将退回 inplace + 文件快照模式。');
       }
-    } else if (readonlyHits.length > 0 && codexHits.length === 0 && !taskLower.includes('修改') && !taskLower.includes('实现') && !taskLower.includes('修复')) {
+    } else if (
+      readonlyHits.length > 0 &&
+      (workerHits.codex?.length || 0) === 0 &&
+      !taskLower.includes('修改') &&
+      !taskLower.includes('实现') &&
+      !taskLower.includes('修复')
+    ) {
       isolation = 'readonly';
       reasons.push(`任务偏向只读分析/审查（${readonlyHits.join(', ')}），默认限制为只读模式`);
     } else {
@@ -68,32 +97,44 @@ export function recommendRoute(input, config) {
   // 2. Determine worker
   let worker = input.forceWorker || null;
   if (worker) {
+    if (worker !== 'self' && !hasAdapter(worker)) {
+      throw new Error(`Unknown worker "${worker}". Registered workers: ${listAdapterIds().join(', ')}.`);
+    }
     reasons.push(`采用显式指定的执行者：${worker}`);
   } else if (
     typeof input.filesCount === 'number' &&
     input.filesCount > 0 &&
     input.filesCount <= selfMaxFiles &&
     input.risk !== 'high' &&
-    codexHits.length === 0 &&
-    dshHits.length === 0
+    !anyEnabledWorkerKeywordHit
   ) {
     worker = 'self';
     reasons.push(`预计涉及 ≤${selfMaxFiles} 个文件且风险可控，由主模型直接完成更省沟通成本`);
-  } else if (selfHits.length > 0 && codexHits.length === 0 && dshHits.length === 0 && isolation === 'readonly') {
+  } else if (selfHits.length > 0 && !anyEnabledWorkerKeywordHit && isolation === 'readonly') {
     worker = 'self';
     reasons.push(`属于纯问答/讨论/小改（命中：${selfHits.join(', ')}），无需外部派发`);
-  } else if (dshHits.length > codexHits.length) {
-    worker = 'dsh';
-    reasons.push(`命中 dsh 优势关键词（${dshHits.join(', ')}）`);
-  } else if (codexHits.length > 0) {
-    worker = 'codex';
-    reasons.push(`命中 codex 优势关键词（${codexHits.join(', ')}）`);
-  } else if (/[\u4e00-\u9fa5]/.test(task) && isolation === 'readonly') {
-    worker = 'dsh';
-    reasons.push('中文只读调研/总结任务，默认优先分配给 dsh');
   } else {
-    worker = 'codex';
-    reasons.push('默认开发任务优先由 codex 承担，dsh 作为备选兜底');
+    let bestWorker = null;
+    let bestScore = 0;
+    for (const id of enabledWorkers) {
+      const score = workerHits[id]?.length || 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestWorker = id;
+      }
+    }
+
+    if (bestWorker && bestScore > 0) {
+      worker = bestWorker;
+      reasons.push(`命中 ${bestWorker} 优势关键词（${workerHits[bestWorker].join(', ')}）`);
+    } else if (/[\u4e00-\u9fa5]/.test(task) && isolation === 'readonly' && enabledWorkers.includes('dsh')) {
+      worker = 'dsh';
+      reasons.push('中文只读调研/总结任务，默认优先分配给 dsh');
+    } else {
+      worker = enabledWorkers[0] || 'codex';
+      const fb = fallbackMap[worker] || '';
+      reasons.push(`默认开发任务优先由 ${worker} 承担${fb ? `，${fb} 作为备选兜底` : ''}`);
+    }
   }
 
   // 3. Determine tier, model, effort, analysis depth & timeout
@@ -115,10 +156,17 @@ export function recommendRoute(input, config) {
     Number(tierConfig.timeoutSec || (isHeavy ? Math.max(defaultTimeoutSec, 1200) : defaultTimeoutSec))
   );
 
-  const fallback = worker === 'self' ? null : (fallbackMap[worker] || null);
-  const sandbox = worker === 'codex'
-    ? (isolation === 'readonly' ? 'read-only' : 'workspace-write')
-    : (isolation === 'readonly' ? 'prompt-readonly' : 'workspace-default');
+  let fallback = null;
+  if (worker !== 'self') {
+    const mapped = fallbackMap[worker];
+    if (mapped && mapped !== worker) {
+      fallback = mapped;
+    } else {
+      fallback = enabledWorkers.find((id) => id !== worker) || null;
+    }
+  }
+
+  const sandbox = getSandboxLabel(worker, isolation);
 
   return {
     worker,
@@ -130,6 +178,7 @@ export function recommendRoute(input, config) {
     effort,
     isGit: gitRepo,
     cwd,
+    enabledWorkers,
     analysisDepth,
     timeoutSec,
     requiresConfirmation: worker !== 'self',

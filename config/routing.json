@@ -6,14 +6,24 @@
     "selfMaxFiles": 2,
     "codexThreadSource": "vscode",
     "dashboardPort": 4310,
+    "enabledWorkers": [
+      "codex",
+      "dsh"
+    ],
     "defaultFallback": {
       "codex": "dsh",
-      "dsh": "codex"
+      "dsh": "codex",
+      "claude": "codex",
+      "gemini": "dsh",
+      "qwen": "dsh"
     }
   },
   "models": {
     "codex": null,
-    "dsh": null
+    "dsh": null,
+    "claude": null,
+    "gemini": null,
+    "qwen": null
   },
   "tiers": {
     "codex": {
@@ -49,11 +59,62 @@
         "effort": null,
         "timeoutSec": 1200
       }
+    },
+    "claude": {
+      "light": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "standard": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "heavy": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 1200
+      }
+    },
+    "gemini": {
+      "light": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "standard": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "heavy": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 1200
+      }
+    },
+    "qwen": {
+      "light": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "standard": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 600
+      },
+      "heavy": {
+        "model": null,
+        "effort": null,
+        "timeoutSec": 1200
+      }
     }
   },
   "workers": {
     "self": {
-      "label": "Antigravity (主模型)",
+      "label": "Host Agent (主模型)",
       "description": "纯问答/设计讨论、≤2 个文件的小修小改、派发前分析与派发后实证验收",
       "keywords": [
         "解释",
@@ -106,6 +167,33 @@
         "中文",
         "dsh",
         "批量"
+      ]
+    },
+    "claude": {
+      "label": "Claude Code CLI",
+      "description": "复杂架构重构、代码审查、全栈开发（需在 enabledWorkers 中启用或用 --worker claude 指定）",
+      "keywords": [
+        "claude",
+        "architecture",
+        "设计模式",
+        "前端组件"
+      ]
+    },
+    "gemini": {
+      "label": "Gemini CLI",
+      "description": "超大上下文代码库梳理、多文件分析与调研（需在 enabledWorkers 中启用或用 --worker gemini 指定）",
+      "keywords": [
+        "gemini",
+        "全库分析",
+        "repo survey"
+      ]
+    },
+    "qwen": {
+      "label": "Qwen Code CLI",
+      "description": "通用脚本编写、中英文编码辅助与低成本分流（需在 enabledWorkers 中启用或用 --worker qwen 指定）",
+      "keywords": [
+        "qwen",
+        "通义"
       ]
     }
   },

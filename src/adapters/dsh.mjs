@@ -1,4 +1,20 @@
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseJsonLines, resolveNodeCliBinary, runQuickCommand, truncateText } from './utils.mjs';
+
+/**
+ * Dynamically resolve dsh CLI entrypoint, preferring direct node execution of @deepseek-ai/dsh/lib/bin.js.
+ * @returns {{ found: boolean, command: string | null, argsPrefix: string[], source: string | null, error?: string }}
+ */
+export function resolveDshBinary() {
+  return resolveNodeCliBinary({
+    envVar: 'DSH_BIN_JS',
+    commandName: 'dsh',
+    packageRelativePath: path.join('@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    sourceLabel: 'node-toolchain:@deepseek-ai/dsh',
+  });
+}
 
 /**
  * Query DSH's current headless `agent-default-model` config (`provider` and `model`)
@@ -118,6 +134,68 @@ function addNumber(acc, key, val) {
 }
 
 /**
+ * Normalize one DSH headless JSONL event line for live timeline display.
+ * @param {any} ev
+ * @param {{ sessionId: string | null, toolCalls: number, usage: any }} state
+ */
+export function parseDshEventLine(ev, state) {
+  if (ev.type === 'session' && ev.sessionId) {
+    state.sessionId = ev.sessionId;
+    return { kind: 'status', title: 'DSH 会话已建立', detail: ev.sessionId };
+  }
+  if (ev.type === 'status') {
+    if (ev.phase === 'step_end' && ev.usage) {
+      state.usage = state.usage || {};
+      for (const k of ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'reasoningTokens']) {
+        if (typeof ev.usage[k] === 'number') {
+          state.usage[k] = (state.usage[k] || 0) + ev.usage[k];
+        }
+      }
+      return { kind: 'status', title: `步骤 ${ev.step ?? ''} 完成`.trim(), detail: `totalTokens=${state.usage.totalTokens ?? '-'}` };
+    }
+    if (ev.phase === 'turn_start') {
+      return { kind: 'status', title: '开始推理轮次', detail: '' };
+    }
+    if (ev.phase === 'step_start') {
+      return { kind: 'status', title: `步骤 ${ev.step ?? ''} 开始`.trim(), detail: '' };
+    }
+    if (ev.phase === 'turn_end') {
+      const reason = typeof ev.reason === 'string' ? ev.reason : ev.reason?.kind || '';
+      return { kind: 'status', title: '轮次结束', detail: reason };
+    }
+  }
+  if (ev.type === 'thinking' && ev.text) {
+    return { kind: 'thinking', title: '思考', detail: truncateText(ev.text, 220) };
+  }
+  if (ev.type === 'text' && ev.text) {
+    return { kind: 'text', title: '阶段输出', detail: truncateText(ev.text, 320) };
+  }
+  if (ev.type === 'tool_call') {
+    state.toolCalls += 1;
+    const inputPreview = typeof ev.input === 'string' ? ev.input : JSON.stringify(ev.input || {});
+    return {
+      kind: 'tool_call',
+      title: `调用工具: ${ev.tool || 'unknown'}`,
+      detail: truncateText(inputPreview, 240),
+    };
+  }
+  if (ev.type === 'tool_result') {
+    return {
+      kind: 'tool_result',
+      title: `工具结果 (${ev.status || 'completed'})`,
+      detail: truncateText(ev.result || '', 220),
+    };
+  }
+  if (ev.type === 'final') {
+    return { kind: 'final', title: '最终结果', detail: truncateText(ev.text || '', 320) };
+  }
+  if (ev.type === 'error') {
+    return { kind: 'error', title: '错误', detail: truncateText(ev.message || '', 300) };
+  }
+  return null;
+}
+
+/**
  * Parse `@deepseek-ai/dsh-headless` `--json` JSONL projection output.
  * @param {string} rawText
  */
@@ -131,17 +209,7 @@ export function parseDshJsonl(rawText) {
   const usageTotal = {};
   let hasUsage = false;
 
-  for (const line of String(rawText || '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || !trimmed.startsWith('{')) continue;
-
-    let ev;
-    try {
-      ev = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-
+  for (const ev of parseJsonLines(rawText)) {
     if (ev.type === 'session' && ev.sessionId) {
       sessionId = ev.sessionId;
     } else if (ev.type === 'tool_call') {
@@ -176,3 +244,51 @@ export function parseDshJsonl(rawText) {
     finalMessage: (finalMessage || lastTextBlock || '').trim(),
   };
 }
+
+export const dshAdapter = {
+  id: 'dsh',
+  displayName: 'DeepSeek Harness (dsh)',
+  resolveBinary: resolveDshBinary,
+  getVersion(resolved) {
+    if (!resolved?.found || !resolved?.command) return null;
+    const v = runQuickCommand(resolved.command, [...(resolved.argsPrefix || []), '--version']);
+    return v.ok ? v.stdout : v.stderr || null;
+  },
+  prepareRun({ backend, model, effort, dryRun, runDir, stateDir }) {
+    if (!model && !effort) {
+      return { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
+    }
+    const base = dryRun
+      ? { provider: 'deepseek-official', model: 'deepseek-flash' }
+      : resolveDshDefaultModel(backend);
+    const dshOverridePatch = buildDshOverridePatchYaml({
+      model,
+      effort,
+      baseProvider: base.provider,
+      baseModel: base.model,
+    });
+    if (!dshOverridePatch) {
+      return { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
+    }
+    if (dryRun) {
+      const fakePath = path.join(stateDir, 'runs', '<run-id>', 'dsh-override-patch.yml');
+      return { extraPatchPaths: [fakePath], dshOverridePatch, dshOverridePatchFile: null };
+    }
+    const file = path.join(runDir, 'dsh-override-patch.yml');
+    fs.writeFileSync(file, dshOverridePatch, 'utf8');
+    return { extraPatchPaths: [file], dshOverridePatch, dshOverridePatchFile: file };
+  },
+  buildArgs({ argsPrefix, useStoredCredentials, authPatchPath, extraPatchPaths, sessionId }) {
+    return buildDshArgs({
+      argsPrefix,
+      useStoredCredentials,
+      authPatchPath,
+      extraPatchPaths,
+      sessionId,
+    });
+  },
+  parseResult(rawText) {
+    return parseDshJsonl(rawText);
+  },
+  parseEventLine: parseDshEventLine,
+};

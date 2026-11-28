@@ -67,12 +67,12 @@ function printJson(obj, exitCode = 0) {
 }
 
 function printHelp() {
-  const text = `agent-dispatch - Analyze, route, execute, monitor, and archive codex / dsh tasks
+  const text = `agent-dispatch - Analyze, route, execute, monitor, and archive multi-agent tasks
 
 Usage:
   dispatch doctor
-  dispatch route --task <text> [--task-file <path>] [--cwd <dir>] [--files-count <n>] [--risk low|medium|high] [--mode readonly|inplace|worktree] [--worker self|codex|dsh] [--model <id>] [--effort <level>]
-  dispatch run --worker codex|dsh (--task <text> | --task-file <path>) [--cwd <dir>] [--mode readonly|inplace|worktree] [--tier light|standard|heavy] [--timeout <sec>] [--model <id>] [--effort <level>] [--constraint <text>] [--no-dsh-stored-auth] [--dry-run]
+  dispatch route --task <text> [--task-file <path>] [--cwd <dir>] [--files-count <n>] [--risk low|medium|high] [--mode readonly|inplace|worktree] [--worker self|codex|dsh|claude|gemini|qwen] [--model <id>] [--effort <level>]
+  dispatch run --worker codex|dsh|claude|gemini|qwen (--task <text> | --task-file <path>) [--cwd <dir>] [--mode readonly|inplace|worktree] [--tier light|standard|heavy] [--timeout <sec>] [--model <id>] [--effort <level>] [--constraint <text>] [--no-dsh-stored-auth] [--dry-run]
   dispatch resume --run-id <id> (--task <text> | --task-file <path>) [--timeout <sec>] [--model <id>] [--effort <level>] [--constraint <text>] [--dry-run]
   dispatch inspect --run-id <id>
   dispatch list [--limit <n>]

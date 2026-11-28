@@ -148,3 +148,133 @@ test('determineStatus catches object turnEndReason error and aborted states', ()
   assert.equal(determineStatus({ timedOut: false, exitCode: 0, errors: [], turnEndReason: { kind: 'aborted' } }), 'error');
   assert.equal(determineStatus({ timedOut: true, exitCode: 1, errors: [], turnEndReason: null }), 'timeout');
 });
+
+import { buildClaudeArgs, parseClaudeJsonl } from '../src/adapters/claude.mjs';
+import { buildGeminiArgs, parseGeminiJsonl } from '../src/adapters/gemini.mjs';
+import { getAdapter, hasAdapter, listAdapterIds } from '../src/adapters/index.mjs';
+import { buildQwenArgs, parseQwenJsonl } from '../src/adapters/qwen.mjs';
+
+test('adapter registry exposes all 5 built-in adapters', () => {
+  const ids = listAdapterIds();
+  assert.deepEqual(ids, ['codex', 'dsh', 'claude', 'gemini', 'qwen']);
+  assert.equal(hasAdapter('claude'), true);
+  assert.equal(hasAdapter('unknown-bot'), false);
+  assert.equal(getAdapter('gemini').id, 'gemini');
+});
+
+test('claude args and stream-json parser handle plan/acceptEdits, resume, and tool_use', () => {
+  const args = buildClaudeArgs({
+    argsPrefix: ['cli.js'],
+    mode: 'readonly',
+    model: 'sonnet',
+    sessionId: 'sess-c1',
+  });
+  assert.deepEqual(args, [
+    'cli.js',
+    '-p',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--permission-mode',
+    'plan',
+    '--model',
+    'sonnet',
+    '--resume',
+    'sess-c1',
+  ]);
+
+  const parsed = parseClaudeJsonl(
+    [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-c2' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Read', input: { file_path: 'a.js' } },
+            { type: 'text', text: 'working' },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'result',
+        is_error: false,
+        result: 'OK_CLAUDE',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+    ].join('\n')
+  );
+  assert.equal(parsed.sessionId, 'sess-c2');
+  assert.equal(parsed.toolCalls, 1);
+  assert.equal(parsed.finalMessage, 'OK_CLAUDE');
+  assert.deepEqual(parsed.errors, []);
+});
+
+test('gemini args and stream-json parser handle plan/auto_edit, delta chunks, and errors', () => {
+  const args = buildGeminiArgs({
+    argsPrefix: ['gemini.js'],
+    mode: 'inplace',
+    model: 'gemini-2.5-pro',
+    sessionId: 'latest',
+  });
+  assert.deepEqual(args, [
+    'gemini.js',
+    '-p',
+    '',
+    '--output-format',
+    'stream-json',
+    '--approval-mode',
+    'auto_edit',
+    '-m',
+    'gemini-2.5-pro',
+    '-r',
+    'latest',
+  ]);
+
+  const parsed = parseGeminiJsonl(
+    [
+      JSON.stringify({ type: 'init', session_id: 'g-123' }),
+      JSON.stringify({ type: 'tool_use', tool_name: 'read_file', parameters: {} }),
+      JSON.stringify({ type: 'message', role: 'assistant', content: 'OK_', delta: true }),
+      JSON.stringify({ type: 'message', role: 'assistant', content: 'GEMINI', delta: true }),
+      JSON.stringify({ type: 'result', status: 'success', stats: { total_tokens: 42 } }),
+    ].join('\n')
+  );
+  assert.equal(parsed.sessionId, 'g-123');
+  assert.equal(parsed.toolCalls, 1);
+  assert.equal(parsed.finalMessage, 'OK_GEMINI');
+  assert.deepEqual(parsed.usage, { total_tokens: 42 });
+});
+
+test('qwen args and stream-json parser handle approval-mode, resume, and result', () => {
+  const args = buildQwenArgs({
+    argsPrefix: ['cli-entry.js'],
+    mode: 'readonly',
+    model: 'qwen3-coder',
+    sessionId: 'q-99',
+  });
+  assert.deepEqual(args, [
+    'cli-entry.js',
+    '--output-format',
+    'stream-json',
+    '--approval-mode',
+    'plan',
+    '-m',
+    'qwen3-coder',
+    '-r',
+    'q-99',
+  ]);
+
+  const parsed = parseQwenJsonl(
+    [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'q-100' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'bash', input: {} }] },
+      }),
+      JSON.stringify({ type: 'result', is_error: false, result: 'OK_QWEN' }),
+    ].join('\n')
+  );
+  assert.equal(parsed.sessionId, 'q-100');
+  assert.equal(parsed.toolCalls, 1);
+  assert.equal(parsed.finalMessage, 'OK_QWEN');
+});

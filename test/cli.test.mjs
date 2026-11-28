@@ -95,3 +95,38 @@ test('CLI run --dry-run builds valid codex and dsh plans', () => {
     fs.rmSync(tempState, { recursive: true, force: true });
   }
 });
+
+test('CLI run --dry-run works with mock CLAUDE_BIN, GEMINI_BIN, and QWEN_BIN', () => {
+  const tempState = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-cli-multi-'));
+  const mockBin = path.join(tempState, 'mock-cli.js');
+  fs.writeFileSync(mockBin, 'console.log("ok");\n', 'utf8');
+  try {
+    for (const [worker, envVar] of [
+      ['claude', 'CLAUDE_BIN'],
+      ['gemini', 'GEMINI_BIN'],
+      ['qwen', 'QWEN_BIN'],
+    ]) {
+      const plan = runCli(
+        [
+          'run',
+          '--worker',
+          worker,
+          '--mode',
+          'readonly',
+          '--cwd',
+          PROJECT_ROOT,
+          '--task',
+          'Inspect repository',
+          '--dry-run',
+        ],
+        { AGENT_DISPATCH_HOME: tempState, [envVar]: mockBin }
+      );
+      assert.equal(plan.dryRun, true);
+      assert.equal(plan.worker, worker);
+      assert.equal(plan.command, process.execPath);
+      assert.equal(plan.args[0], mockBin);
+    }
+  } finally {
+    fs.rmSync(tempState, { recursive: true, force: true });
+  }
+});

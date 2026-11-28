@@ -1,18 +1,21 @@
 {
   "name": "agent-dispatch",
-  "version": "0.1.0",
-  "description": "Local task analysis, routing, sandboxed execution, and verification wrapper for Codex CLI and DeepSeek Harness (dsh).",
+  "version": "0.2.0",
+  "description": "Zero-dependency local task analysis, routing, sandboxed execution, MCP server, and live dashboard for Codex, DSH, Claude Code, Gemini CLI, and Qwen Code.",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
   },
   "bin": {
-    "agent-dispatch": "./bin/dispatch.mjs"
+    "agent-dispatch": "./bin/dispatch.mjs",
+    "agent-dispatch-mcp": "./bin/mcp-server.mjs",
+    "agent-dispatch-install": "./bin/install.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "doctor": "node bin/dispatch.mjs doctor",
-    "ui": "node bin/dispatch.mjs ui"
+    "ui": "node bin/dispatch.mjs ui",
+    "mcp": "node bin/mcp-server.mjs"
   },
   "license": "MIT"
 }

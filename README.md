@@ -1,78 +1,124 @@
 # agent-dispatch
 
-面向 **Antigravity + Codex CLI + DeepSeek Harness (`dsh`)** 的本地任务分析、分流路由、沙箱隔离与实证验收工作流（零外部依赖，Node.js ESM）。
+零外部依赖的 **多 Agent 任务分析、路由分流、沙箱隔离执行与实证验收工作流**（Node.js ESM）。
 
-## 功能特点
+由主 Agent 负责轻量分析、出派发确认单与事后实证验收；将编码、重构、测试、脚本、调研等重活分流给本地非交互 CLI Agent（**Codex CLI、DeepSeek Harness `dsh`、Claude Code、Gemini CLI、Qwen Code**），同时提供 **标准 MCP Server** 与 **实时进度看板**。
 
-- **智能路由推荐（`route`）**：依据任务类型、风险和改动规模，在主模型直做、`codex`、`dsh` 之间推荐分工，并支持用户配置覆盖。
-- **双引擎非交互适配**：
-  - **Codex CLI**：自动发现本机 `CODEX_BIN`、`PATH` 或 Windows Store `OpenAI.Codex` 应用包内的 `codex.exe`，统一使用 `exec --json` / `exec resume` 与 `-o` 捕获最终消息。
-  - **DeepSeek Harness (`dsh`)**：调用 `dsh --profile headless --json`，默认通过 `--patch` 自动接通本机已有登录凭据，无需额外配置 API Key。
-- **分级隔离与安全护栏**：
-  - `readonly`：只读调研与审查
-  - `inplace`：就地改动，自动记录 Git 基线或非 Git 目录文件快照
-  - `worktree`：高风险或并行改动，在状态目录下创建临时 Git worktree 隔离执行
-  - 内置硬性禁令（禁止 `git push`、删分支/强推、修改项目外全局配置）
-- **超时保护与运行归档**：默认 10 分钟超时（可调至 30 分钟），超时自动强杀进程树并保留现场；日志、diff 与 `sessionId` 统一保存在状态目录，不污染目标仓库。
+```text
+  Host Agent (Antigravity / Claude Code / Cursor / Gemini CLI / Windsurf / MCP Client)
+         │
+         ▼  route / run / resume (CLI 或 stdio MCP Server)
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                     agent-dispatch 核心层                        │
+  │  路由推荐 · Git 基线/Worktree · 非 Git 快照 · 超时强杀 · 档案库   │
+  └──────┬─────────────┬─────────────┬─────────────┬─────────────┬───┘
+         ▼             ▼             ▼             ▼             ▼
+     Codex CLI        DSH       Claude Code   Gemini CLI    Qwen Code
+```
+
+---
+
+## 平台与执行器兼容性
+
+### 1. 作为「指挥官 / 宿主平台」（谁来发起派发）
+
+| 宿主平台 | 接入方式 | 实时进度查看 | 一键安装命令 |
+|---|---|---|---|
+| **Antigravity** | 原生 Plugin（常驻规则 + Skill + 右侧边栏 Sidecar 看板） | 原生侧边栏 **Dispatch 看板** / `ui` / `watch` | `node bin/install.mjs antigravity` |
+| **Claude Code** | Skill + stdio MCP Server | `dispatch ui` 网页看板 / `watch` | `node bin/install.mjs claude-code` |
+| **Cursor** | `.cursor/rules/agent-dispatch.mdc` + MCP Server | `dispatch ui` 网页看板 / `watch` | `node bin/install.mjs cursor` |
+| **Gemini CLI** | Skill + stdio MCP Server | `dispatch ui` 网页看板 / `watch` | `node bin/install.mjs gemini-cli` |
+| **Codex CLI** | Skill（`~/.codex/skills/`） | `dispatch ui` 网页看板 / `watch` | `node bin/install.mjs codex` |
+| **Windsurf / Cline / Roo / Cherry Studio** | 标准 stdio MCP Server（`bin/mcp-server.mjs`） | `dispatch ui` 网页看板 / `watch` | `node bin/install.mjs mcp-config` |
+
+### 2. 作为「干活执行器」（派发给谁）
+
+| Worker ID | 工具 | 默认自动路由 | 隔离/沙箱能力 | 会话续跑 |
+|---|---|---|---|---|
+| `codex` | OpenAI Codex CLI（含 Windows Store Appx 自动发现） | 默认启用 | `read-only` / `workspace-write` / `worktree` | `exec resume` |
+| `dsh` | DeepSeek Harness (`dsh --profile headless`) | 默认启用 | 提示词只读 / `inplace` / `worktree`，自动 `--patch` 复用本地登录态 | `--session-id` |
+| `claude` | Anthropic Claude Code CLI (`claude -p`) | 按需启用或 `--worker claude` | `--permission-mode plan / acceptEdits` | `--resume` |
+| `gemini` | Google Gemini CLI (`gemini -p`) | 按需启用或 `--worker gemini` | `--approval-mode plan / auto_edit` | `-r <session>` |
+| `qwen` | Qwen Code CLI (`qwen --output-format stream-json`) | 按需启用或 `--worker qwen` | `--approval-mode plan / auto-edit` | `-r <session>` |
+
+> 默认 `enabledWorkers` 为 `["codex", "dsh"]`。编辑 `~/.agent-dispatch/routing.json` 中的 `defaults.enabledWorkers` 即可随时把 `claude`、`gemini`、`qwen` 加入自动路由池，或在调用时用 `--worker <id>` 直接指定。
+
+---
 
 ## 环境要求
 
-- Node.js `>= 22.0.0`
+- Node.js `>= 22.0.0`（零第三方 npm 依赖）
 - Git
-- Codex CLI（已在 PATH 中，或已安装 Windows Store 版 `OpenAI.Codex`）
-- DeepSeek Harness（`@deepseek-ai/dsh`）
+- 至少安装并登录上述任一 CLI 工具（Windows / macOS / Linux 通用）
+
+---
 
 ## 快速开始
 
 ```bash
-# 1. 检查运行环境与登录态
+# 1. 克隆仓库
+git clone https://github.com/Ray1270/agent-dispatch.git
+cd agent-dispatch
+
+# 2. 检查本机已安装的 CLI 工具、Git 与状态目录
 node bin/dispatch.mjs doctor
 
-# 2. 运行单元与集成测试
+# 3. 运行自动化测试
 npm test
 
-# 3. 获取任务路由建议
+# 4. 一键安装到你使用的平台（如 antigravity / claude-code / cursor / gemini-cli / codex）
+node bin/install.mjs antigravity
+```
+
+### 常用 CLI 命令
+
+```bash
+# 评估任务路由建议
 node bin/dispatch.mjs route --cwd "/path/to/repo" --task "重构登录模块并补充测试"
 
-# 4. 派发任务（支持 --dry-run 预览命令，可按需覆盖 --model 与 --effort）
+# 派发任务（支持 --dry-run 预览命令，支持 --model 与 --effort 覆盖）
 node bin/dispatch.mjs run --worker codex --mode readonly --effort medium --cwd "/path/to/repo" --task "检查项目结构"
 
-# 5. 打开实时进度网页看板 / 终端实时跟踪
+# 打开实时进度网页看板（默认 http://127.0.0.1:4310）或终端实时流
 node bin/dispatch.mjs ui
 node bin/dispatch.mjs watch
 
-# 6. 基于 runId 续派同一会话
+# 基于 runId 续派同一会话
 node bin/dispatch.mjs resume --run-id "<run-id>" --task "继续修复剩余报错"
 
-# 7. 查看最近运行记录 / 检查单次详情 / 清理 worktree
+# 查看历史记录 / 检查详情 / 清理 worktree
 node bin/dispatch.mjs list --limit 10
 node bin/dispatch.mjs inspect --run-id "<run-id>"
 node bin/dispatch.mjs cleanup-worktree --run-id "<run-id>"
 ```
 
-## 模型、思考强度与实时看板
+---
 
-- **默认继承 + 分档调节**：`routing.json` 中 `models.codex` / `models.dsh` 默认为 `null`（继承本机各自默认配置）；`tiers` 支持按 `light`（只读）、`standard`（常规）、`heavy`（高风险/worktree/大任务）自动选择思考强度与超时（例如 Codex 默认 `medium` / `high` / `ultra`，heavy 自动 1200s）。
-- **单次覆盖**：通过 `--model <id>` 与 `--effort <level>` 可覆盖任意一次 `run` 或 `resume`：
-  - `codex` 通过 `-m` 与 `-c model_reasoning_effort=...` 传递，并默认附带 `--thread-source vscode` 便于在桌面端查看会话；
-  - `dsh` 通过单次临时 `--patch` 覆写 `agent-default-model` 的 `model` / `reasoningEffort`，不影响全局配置。
-- **实时看板（侧边栏 / 独立网页 / 终端）**：
-  - **Antigravity 侧边栏直开（推荐）**：安装完整 `plugin/`（含 `sidecars/dashboard/`）后，可在侧边栏直接打开 **Dispatch 看板**，无需另开浏览器窗口。
-  - **独立网页 / 终端**：也可运行 `npm run ui`（默认 `http://127.0.0.1:4310`）或 `node bin/dispatch.mjs watch` 查看实时步骤流、耗时进度条、工具调用与变更清单。
+## 接入任意 MCP 客户端
 
-## 配置与状态目录
+运行 `node bin/install.mjs mcp-config` 获取适配本机路径的 JSON，加入客户端配置即可暴露 7 个标准 MCP 工具（`dispatch_doctor`、`dispatch_route`、`dispatch_run`、`dispatch_resume`、`dispatch_list`、`dispatch_inspect`、`dispatch_cleanup_worktree`）：
 
-- 运行时状态、历史记录（`runs/`）、临时工作树（`worktrees/`）以及可编辑的 `routing.json` 默认保存在 `~/.agent-dispatch/`。
-- 如需迁移出默认目录（例如挪到其他磁盘），设置环境变量 `AGENT_DISPATCH_HOME` 指向目标目录即可。
+```json
+{
+  "mcpServers": {
+    "agent-dispatch": {
+      "command": "node",
+      "args": ["/absolute/path/to/agent-dispatch/bin/mcp-server.mjs"]
+    }
+  }
+}
+```
 
-## 安装 Antigravity 插件（推荐，支持主动触发与侧边栏看板）
+---
 
-将 [`plugin/`](plugin/) 目录整体复制到 `~/.gemini/config/plugins/agent-dispatch/`，并将 `skills/agent-dispatch/SKILL.md` 及 `sidecars/dashboard/main.mjs` 中的 `<AGENT_DISPATCH_ROOT>` 替换为本仓库的实际本地路径。
+## 模型分档、安全护栏与状态目录
 
-安装后包含：
-- `rules/AGENTS.md`：常驻轻量规则，让主模型遇到中大型编码、重构、测试、脚本或调研任务时**主动进入派发分析并给出确认单**（无需每次手动提醒）。
-- `skills/agent-dispatch/SKILL.md`：完整的分析、派发、验收与返工流程。
-- `sidecars/dashboard/`：内嵌于 Antigravity 右侧边栏的实时进度看板。
-- 在 Antigravity 插件设置中可随时一键开启/关闭。
+- **模型与思考强度分档**：`routing.json` 的 `tiers` 按 `light`（只读）、`standard`（常规）、`heavy`（高风险/worktree/大任务）自动调整思考强度与超时（如 Codex 默认 `medium` / `high` / `ultra`，heavy 自动 1200s），也可随时通过 `--model` 与 `--effort` 单次覆盖。
+- **硬性禁止护栏**：自动提示 worker 禁止 `git push`、删分支/强推、修改项目外全局配置；高风险或并行任务支持隔离 Git `worktree`；非 Git 目录自动做执行前后文件哈希快照对比。
+- **不污染业务仓库**：所有运行日志、diff 补丁、`sessionId` 与可编辑 `routing.json` 统一保存在 `~/.agent-dispatch/`（可通过环境变量 `AGENT_DISPATCH_HOME` 迁移到任意磁盘）。
 
-如果不需要自动触发规则、只想手动按需调用，也可以只把 [`skill/SKILL.md`](skill/SKILL.md) 复制到 `~/.gemini/config/skills/agent-dispatch/SKILL.md`（同样替换 `<AGENT_DISPATCH_ROOT>`）。
+---
+
+## 扩展更多 Agent
+
+想接入 OpenCode、Aider 或内部自研 CLI？参考 [添加自定义 Agent 适配器指南](docs/adding-an-adapter.md)。

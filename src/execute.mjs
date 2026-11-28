@@ -1,9 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildCodexArgs, parseCodexJsonl } from './adapters/codex.mjs';
-import { buildDshArgs, buildDshOverridePatchYaml, parseDshJsonl, resolveDshDefaultModel } from './adapters/dsh.mjs';
+import { getAdapter } from './adapters/index.mjs';
 import { ensureUserConfig, getDshAuthPatchPath, getStateDir, loadConfig } from './config.mjs';
-import { resolveCodexBinary, resolveDshBinary } from './discovery.mjs';
 import { buildWorkerPrompt } from './prompt.mjs';
 import { runProcess } from './runner.mjs';
 import { createRunDir, generateRunId, loadRunMeta, saveRunMeta } from './store.mjs';
@@ -17,22 +15,12 @@ import {
   removeWorktree,
 } from './workspace.mjs';
 
-function resolveBackend(worker) {
-  if (worker === 'codex') {
-    const bin = resolveCodexBinary();
-    if (!bin.found || !bin.command) {
-      throw new Error(bin.error || 'Codex CLI not found.');
-    }
-    return { command: bin.command, argsPrefix: [], source: bin.source };
+function resolveBackend(adapter) {
+  const bin = adapter.resolveBinary();
+  if (!bin.found || !bin.command) {
+    throw new Error(bin.error || `${adapter.displayName || adapter.id} CLI not found.`);
   }
-  if (worker === 'dsh') {
-    const bin = resolveDshBinary();
-    if (!bin.found || !bin.command) {
-      throw new Error(bin.error || 'dsh CLI not found.');
-    }
-    return { command: bin.command, argsPrefix: bin.argsPrefix || [], source: bin.source };
-  }
-  throw new Error(`Unsupported worker "${worker}". Expected "codex" or "dsh".`);
+  return { command: bin.command, argsPrefix: bin.argsPrefix || [], source: bin.source };
 }
 
 export function determineStatus({ timedOut, exitCode, errors, turnEndReason }) {
@@ -56,7 +44,7 @@ function inferTier({ mode, task, explicitTier }) {
 }
 
 /**
- * Execute a new worker run or dry-run.
+ * Execute a new worker run or dry-run using any registered adapter.
  * @param {object} params
  */
 export async function executeRun(params) {
@@ -64,10 +52,8 @@ export async function executeRun(params) {
   ensureUserConfig(stateDir);
   const config = loadConfig(stateDir);
 
-  const worker = params.worker;
-  if (worker !== 'codex' && worker !== 'dsh') {
-    throw new Error(`--worker must be "codex" or "dsh" (received "${worker}")`);
-  }
+  const worker = String(params.worker || '');
+  const adapter = getAdapter(worker);
 
   const cwd = path.resolve(params.cwd || process.cwd());
   if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
@@ -111,18 +97,8 @@ export async function executeRun(params) {
     throw new Error(`Cannot use --mode worktree because ${cwd} is not a Git repository.`);
   }
 
-  const backend = resolveBackend(worker);
+  const backend = resolveBackend(adapter);
   const warnings = [];
-  let dshOverrideYaml = null;
-  if (worker === 'dsh' && (model || effort)) {
-    const base = params.dryRun ? { provider: 'deepseek-official', model: 'deepseek-flash' } : resolveDshDefaultModel(backend);
-    dshOverrideYaml = buildDshOverridePatchYaml({
-      model,
-      effort,
-      baseProvider: base.provider,
-      baseModel: base.model,
-    });
-  }
 
   if (params.dryRun) {
     const previewPrompt = buildWorkerPrompt({
@@ -133,28 +109,25 @@ export async function executeRun(params) {
       constraints: params.constraints,
     });
     const fakeLastMsg = path.join(stateDir, 'runs', '<run-id>', 'last-message.txt');
-    const fakeOverridePath = dshOverrideYaml
-      ? path.join(stateDir, 'runs', '<run-id>', 'dsh-override-patch.yml')
-      : null;
-    const args =
-      worker === 'codex'
-        ? buildCodexArgs({
-            cwd,
-            mode,
-            isGit: gitRepo,
-            model,
-            effort,
-            threadSource: codexThreadSource,
-            sessionId: null,
-            lastMessageFile: fakeLastMsg,
-          })
-        : buildDshArgs({
-            argsPrefix: backend.argsPrefix,
-            useStoredCredentials,
-            authPatchPath,
-            extraPatchPaths: fakeOverridePath ? [fakeOverridePath] : [],
-            sessionId: null,
-          });
+    const prep = typeof adapter.prepareRun === 'function'
+      ? adapter.prepareRun({ backend, model, effort, dryRun: true, runDir: null, stateDir, config })
+      : { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
+
+    const args = adapter.buildArgs({
+      cwd,
+      mode,
+      isGit: gitRepo,
+      model,
+      effort,
+      threadSource: codexThreadSource,
+      argsPrefix: backend.argsPrefix,
+      useStoredCredentials,
+      authPatchPath,
+      extraPatchPaths: prep.extraPatchPaths,
+      sessionId: null,
+      lastMessageFile: fakeLastMsg,
+    });
+
     return {
       dryRun: true,
       worker,
@@ -170,7 +143,7 @@ export async function executeRun(params) {
       args,
       timeoutSec,
       useStoredCredentials: worker === 'dsh' ? useStoredCredentials : undefined,
-      dshOverridePatch: dshOverrideYaml || undefined,
+      dshOverridePatch: prep.dshOverridePatch || undefined,
       warnings,
       promptPreview: previewPrompt,
     };
@@ -183,11 +156,9 @@ export async function executeRun(params) {
   const lastMessageFile = path.join(runDir, 'last-message.txt');
   const promptFile = path.join(runDir, 'prompt.md');
 
-  let dshOverridePatchFile = null;
-  if (dshOverrideYaml) {
-    dshOverridePatchFile = path.join(runDir, 'dsh-override-patch.yml');
-    fs.writeFileSync(dshOverridePatchFile, dshOverrideYaml, 'utf8');
-  }
+  const prep = typeof adapter.prepareRun === 'function'
+    ? adapter.prepareRun({ backend, model, effort, dryRun: false, runDir, stateDir, config })
+    : { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
 
   let effectiveCwd = cwd;
   let worktreeInfo = null;
@@ -219,25 +190,20 @@ export async function executeRun(params) {
   });
   fs.writeFileSync(promptFile, fullPrompt, 'utf8');
 
-  const args =
-    worker === 'codex'
-      ? buildCodexArgs({
-          cwd: effectiveCwd,
-          mode,
-          isGit: gitRepo,
-          model,
-          effort,
-          threadSource: codexThreadSource,
-          sessionId: null,
-          lastMessageFile,
-        })
-      : buildDshArgs({
-          argsPrefix: backend.argsPrefix,
-          useStoredCredentials,
-          authPatchPath,
-          extraPatchPaths: dshOverridePatchFile ? [dshOverridePatchFile] : [],
-          sessionId: null,
-        });
+  const args = adapter.buildArgs({
+    cwd: effectiveCwd,
+    mode,
+    isGit: gitRepo,
+    model,
+    effort,
+    threadSource: codexThreadSource,
+    argsPrefix: backend.argsPrefix,
+    useStoredCredentials,
+    authPatchPath,
+    extraPatchPaths: prep.extraPatchPaths,
+    sessionId: null,
+    lastMessageFile,
+  });
 
   const startedAt = new Date().toISOString();
   const artifacts = {
@@ -247,7 +213,7 @@ export async function executeRun(params) {
     stderrFile,
     lastMessageFile: null,
     diffFile: null,
-    dshOverridePatchFile,
+    dshOverridePatchFile: prep.dshOverridePatchFile || null,
   };
 
   const liveMeta = {
@@ -306,12 +272,9 @@ export async function executeRun(params) {
   const lastMessageContent = fs.existsSync(lastMessageFile)
     ? fs.readFileSync(lastMessageFile, 'utf8')
     : '';
-  const parsed =
-    worker === 'codex'
-      ? parseCodexJsonl(proc.stdout, lastMessageContent)
-      : parseDshJsonl(proc.stdout);
+  const parsed = adapter.parseResult(proc.stdout, lastMessageContent);
 
-  if (worker === 'dsh' && parsed.finalMessage && !fs.existsSync(lastMessageFile)) {
+  if (!adapter.usesLastMessageFile && parsed.finalMessage && !fs.existsSync(lastMessageFile)) {
     fs.writeFileSync(lastMessageFile, parsed.finalMessage, 'utf8');
   }
 
@@ -411,6 +374,7 @@ export async function executeResume(params) {
   }
 
   const worker = parentMeta.worker;
+  const adapter = getAdapter(worker);
   const effectiveCwd = parentMeta.effectiveCwd || parentMeta.cwd;
   if (!fs.existsSync(effectiveCwd)) {
     throw new Error(`Working directory for run ${params.runId} no longer exists: ${effectiveCwd}`);
@@ -438,18 +402,8 @@ export async function executeResume(params) {
     Math.max(10, Number(params.timeoutSec || parentMeta.timeoutSec || defaultTimeoutSec))
   );
 
-  const backend = resolveBackend(worker);
+  const backend = resolveBackend(adapter);
   const warnings = [];
-  let dshOverrideYaml = null;
-  if (worker === 'dsh' && (model || effort)) {
-    const base = params.dryRun ? { provider: 'deepseek-official', model: 'deepseek-flash' } : resolveDshDefaultModel(backend);
-    dshOverrideYaml = buildDshOverridePatchYaml({
-      model,
-      effort,
-      baseProvider: base.provider,
-      baseModel: base.model,
-    });
-  }
 
   if (params.dryRun) {
     const previewPrompt = buildWorkerPrompt({
@@ -460,28 +414,24 @@ export async function executeResume(params) {
       constraints: params.constraints,
     });
     const fakeLastMsg = path.join(stateDir, 'runs', '<run-id>', 'last-message.txt');
-    const fakeOverridePath = dshOverrideYaml
-      ? path.join(stateDir, 'runs', '<run-id>', 'dsh-override-patch.yml')
-      : null;
-    const args =
-      worker === 'codex'
-        ? buildCodexArgs({
-            cwd: effectiveCwd,
-            mode,
-            isGit: gitRepo,
-            model,
-            effort,
-            threadSource: codexThreadSource,
-            sessionId: parentMeta.sessionId,
-            lastMessageFile: fakeLastMsg,
-          })
-        : buildDshArgs({
-            argsPrefix: backend.argsPrefix,
-            useStoredCredentials,
-            authPatchPath,
-            extraPatchPaths: fakeOverridePath ? [fakeOverridePath] : [],
-            sessionId: parentMeta.sessionId,
-          });
+    const prep = typeof adapter.prepareRun === 'function'
+      ? adapter.prepareRun({ backend, model, effort, dryRun: true, runDir: null, stateDir, config })
+      : { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
+
+    const args = adapter.buildArgs({
+      cwd: effectiveCwd,
+      mode,
+      isGit: gitRepo,
+      model,
+      effort,
+      threadSource: codexThreadSource,
+      argsPrefix: backend.argsPrefix,
+      useStoredCredentials,
+      authPatchPath,
+      extraPatchPaths: prep.extraPatchPaths,
+      sessionId: parentMeta.sessionId,
+      lastMessageFile: fakeLastMsg,
+    });
     return {
       dryRun: true,
       resumeOf: params.runId,
@@ -497,7 +447,7 @@ export async function executeResume(params) {
       command: backend.command,
       args,
       timeoutSec,
-      dshOverridePatch: dshOverrideYaml || undefined,
+      dshOverridePatch: prep.dshOverridePatch || undefined,
       warnings,
       promptPreview: previewPrompt,
     };
@@ -510,11 +460,9 @@ export async function executeResume(params) {
   const lastMessageFile = path.join(runDir, 'last-message.txt');
   const promptFile = path.join(runDir, 'prompt.md');
 
-  let dshOverridePatchFile = null;
-  if (dshOverrideYaml) {
-    dshOverridePatchFile = path.join(runDir, 'dsh-override-patch.yml');
-    fs.writeFileSync(dshOverridePatchFile, dshOverrideYaml, 'utf8');
-  }
+  const prep = typeof adapter.prepareRun === 'function'
+    ? adapter.prepareRun({ backend, model, effort, dryRun: false, runDir, stateDir, config })
+    : { extraPatchPaths: [], dshOverridePatch: null, dshOverridePatchFile: null };
 
   const gitBaseline = gitRepo ? getGitBaseline(effectiveCwd) : null;
   const beforeSnapshot = gitRepo ? null : captureFsSnapshot(effectiveCwd);
@@ -528,25 +476,20 @@ export async function executeResume(params) {
   });
   fs.writeFileSync(promptFile, fullPrompt, 'utf8');
 
-  const args =
-    worker === 'codex'
-      ? buildCodexArgs({
-          cwd: effectiveCwd,
-          mode,
-          isGit: gitRepo,
-          model,
-          effort,
-          threadSource: codexThreadSource,
-          sessionId: parentMeta.sessionId,
-          lastMessageFile,
-        })
-      : buildDshArgs({
-          argsPrefix: backend.argsPrefix,
-          useStoredCredentials,
-          authPatchPath,
-          extraPatchPaths: dshOverridePatchFile ? [dshOverridePatchFile] : [],
-          sessionId: parentMeta.sessionId,
-        });
+  const args = adapter.buildArgs({
+    cwd: effectiveCwd,
+    mode,
+    isGit: gitRepo,
+    model,
+    effort,
+    threadSource: codexThreadSource,
+    argsPrefix: backend.argsPrefix,
+    useStoredCredentials,
+    authPatchPath,
+    extraPatchPaths: prep.extraPatchPaths,
+    sessionId: parentMeta.sessionId,
+    lastMessageFile,
+  });
 
   const startedAt = new Date().toISOString();
   const artifacts = {
@@ -556,7 +499,7 @@ export async function executeResume(params) {
     stderrFile,
     lastMessageFile: null,
     diffFile: null,
-    dshOverridePatchFile,
+    dshOverridePatchFile: prep.dshOverridePatchFile || null,
   };
 
   const liveMeta = {
@@ -615,12 +558,9 @@ export async function executeResume(params) {
   const lastMessageContent = fs.existsSync(lastMessageFile)
     ? fs.readFileSync(lastMessageFile, 'utf8')
     : '';
-  const parsed =
-    worker === 'codex'
-      ? parseCodexJsonl(proc.stdout, lastMessageContent)
-      : parseDshJsonl(proc.stdout);
+  const parsed = adapter.parseResult(proc.stdout, lastMessageContent);
 
-  if (worker === 'dsh' && parsed.finalMessage && !fs.existsSync(lastMessageFile)) {
+  if (!adapter.usesLastMessageFile && parsed.finalMessage && !fs.existsSync(lastMessageFile)) {
     fs.writeFileSync(lastMessageFile, parsed.finalMessage, 'utf8');
   }
 
